@@ -54,5 +54,67 @@ testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 | 디버깅 | 용이 | 어려움 |
 | 모니터링 | 중앙 집중 가능 | 분산 추적 필요 |
 | 복잡한 플로우 | 적합 | 부적합 |
+| 업계 사용 비율 | 70-80% | 20-30% |
 
 **선택**: Orchestration (플로우 이해 용이, Temporal 전환 자연스러움)
+
+---
+
+## Spring Cloud vs Kubernetes vs Temporal 비교
+
+### MSA 기술 진화
+
+```
+[2015-2018] Netflix OSS 시대
+├── Eureka, Ribbon, Hystrix, Zuul
+
+[2019-2022] Netflix OSS Deprecated
+├── Ribbon → Spring Cloud LoadBalancer
+├── Hystrix → Resilience4j
+├── Zuul → Spring Cloud Gateway
+└── Sleuth → Micrometer Tracing
+
+[2023-현재] 플랫폼 레벨 전환
+├── Kubernetes 네이티브
+├── Service Mesh (Istio)
+└── Temporal/Cadence
+```
+
+### 기술 선택 매트릭스
+
+| 관심사 | Spring Cloud | Kubernetes | Service Mesh | Temporal |
+|--------|--------------|------------|--------------|----------|
+| 서비스 디스커버리 | Eureka | K8s Service | - | - |
+| 로드 밸런싱 | LoadBalancer | K8s Service | Istio | - |
+| API 게이트웨이 | Gateway | Ingress | Istio Gateway | - |
+| 설정 관리 | Config Server | ConfigMap | - | - |
+| 서킷 브레이커 | Resilience4j | - | Istio | Activity 재시도 |
+| 워크플로우 | - | - | - | **핵심 기능** |
+| Saga 패턴 | 직접 구현 | - | - | **내장** |
+
+### 이 프로젝트의 선택
+
+| 기술 | 결정 | 이유 |
+|------|------|------|
+| Spring Cloud | **미사용** | 학습 목표 집중, Temporal과 역할 중복 |
+| Kubernetes | **미사용** | Docker Compose로 충분, 인프라 학습 분리 |
+| Service Mesh | **미사용** | K8s 없이 의미 없음, 학습 범위 외 |
+| Temporal | **사용** | 핵심 학습 주제 |
+| Resilience4j | **사용** | 장애 대응 패턴 학습 |
+
+### 실무 확장 경로
+
+```
+[현재] Docker Compose + Temporal + Resilience4j
+        │
+        ├─[Option A]─▶ + Spring Cloud (Gateway, Eureka)
+        │               └── Java 중심 환경에 적합
+        │
+        ├─[Option B]─▶ + Kubernetes
+        │               └── 폴리글랏, 플랫폼 표준
+        │
+        └─[Option C]─▶ + K8s + Service Mesh (Istio)
+                        └── 대규모 엔터프라이즈
+```
+
+**상세 가이드**: [MSA 아키텍처 선택 가이드](./MSA-ARCHITECTURE-GUIDE.md)

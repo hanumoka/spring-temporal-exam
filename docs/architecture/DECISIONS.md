@@ -10,6 +10,9 @@
 | D004 | DB 구성 | 공유 DB + 스키마 분리 |
 | D005 | 서비스 구성 | 4개 (Order, Inventory, Payment, Notification) |
 | D006 | 테스트 전략 | 단위 + 통합 (Testcontainers) |
+| D007 | Spring Cloud | 미사용 (학습 범위 집중) |
+| D008 | Kubernetes | 미사용 (Docker Compose로 대체) |
+| D009 | Service Mesh | 미사용 (학습 범위 외) |
 
 ---
 
@@ -111,3 +114,108 @@ Phase 2-B: MQ 이벤트 추가 + Redis 학습
 Phase 3: Temporal 연동
     → "왜 Temporal이 필요한지" 체감
 ```
+
+---
+
+## D007. Spring Cloud 미사용
+
+**결정**: 미사용
+
+**고려된 컴포넌트**:
+- Spring Cloud Gateway (API 게이트웨이)
+- Eureka (서비스 디스커버리)
+- Spring Cloud Config (설정 관리)
+- Spring Cloud LoadBalancer (로드밸런싱)
+
+**미사용 이유**:
+
+```
+1. 학습 목표 집중
+   └── Temporal과 분산 트랜잭션이 핵심 주제
+   └── Spring Cloud는 별도의 큰 학습 주제
+
+2. 복잡도 관리
+   └── 핵심 개념 이해에 방해될 수 있음
+   └── localhost 직접 접근으로 충분
+
+3. Temporal과의 역할 중복
+   └── 서비스 간 통신은 Temporal Activity로 처리
+   └── 재시도/타임아웃은 Temporal이 담당
+```
+
+**대안**:
+- 서비스 디스커버리: 직접 URL 지정 (localhost:808x)
+- 설정 관리: Spring Profiles + 환경변수
+
+**향후 확장**: 실무 적용 시 필요에 따라 추가 가능
+
+---
+
+## D008. Kubernetes 미사용
+
+**결정**: 미사용 (Docker Compose로 대체)
+
+**미사용 이유**:
+
+```
+1. 학습 환경 단순화
+   └── 로컬 개발 환경에서 K8s는 과도함
+   └── Docker Compose로 충분한 컨테이너 환경 제공
+
+2. 인프라 학습과 분리
+   └── K8s는 DevOps 영역
+   └── 애플리케이션 개발에 집중
+
+3. Temporal과 독립적
+   └── Temporal은 K8s 없이도 동작
+   └── Docker Compose에서 충분히 학습 가능
+```
+
+**K8s가 대체하는 Spring Cloud 기능**:
+
+| Spring Cloud | Kubernetes |
+|--------------|------------|
+| Eureka | K8s Service + DNS |
+| Config Server | ConfigMap/Secret |
+| Ribbon | K8s Service (서버사이드 LB) |
+| Gateway | Ingress Controller |
+
+**향후 확장**: 프로덕션 배포 시 K8s 전환 권장
+
+---
+
+## D009. Service Mesh 미사용
+
+**결정**: 미사용
+
+**고려된 기술**: Istio, Linkerd
+
+**미사용 이유**:
+
+```
+1. 학습 범위 외
+   └── Service Mesh는 인프라 레벨 기술
+   └── K8s 없이는 의미 없음
+
+2. 복잡도
+   └── Istio 학습 곡선이 가파름
+   └── 현재 학습 목표와 무관
+
+3. Temporal로 충분
+   └── 비즈니스 레벨 오케스트레이션은 Temporal
+   └── 네트워크 레벨 기능은 현재 불필요
+```
+
+**Service Mesh가 제공하는 기능**:
+- mTLS 자동 암호화
+- 서킷 브레이커 (플랫폼 레벨)
+- 트래픽 관리 (카나리, A/B)
+- 분산 추적 자동 수집
+
+**향후 확장**: 대규모 프로덕션 환경에서 고려
+
+---
+
+## 관련 문서
+
+- [MSA 아키텍처 선택 가이드](./MSA-ARCHITECTURE-GUIDE.md) - 환경별 아키텍처 비교

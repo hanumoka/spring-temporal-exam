@@ -274,6 +274,17 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 | **테스트** | JUnit 5 + Testcontainers | 단위/통합 테스트 |
 | **컨테이너** | Docker Compose | 로컬 인프라 |
 
+### 의도적으로 제외된 기술
+
+| 기술 | 제외 이유 | 대안 |
+|------|----------|------|
+| **Spring Cloud** (Eureka, Gateway) | 학습 목표 집중, Temporal과 역할 중복 | 직접 URL 지정 |
+| **Kubernetes** | Docker Compose로 충분, 인프라 학습 분리 | Docker Compose |
+| **Service Mesh** (Istio) | K8s 없이 의미 없음, 학습 범위 외 | - |
+
+> **참고**: 실무 적용 시 환경에 따라 Spring Cloud, Kubernetes, Service Mesh를 추가할 수 있습니다.
+> 상세 내용은 [MSA 아키텍처 선택 가이드](../architecture/MSA-ARCHITECTURE-GUIDE.md)를 참고하세요.
+
 ---
 
 ## 학습 자료 목록

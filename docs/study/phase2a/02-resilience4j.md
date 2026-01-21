@@ -70,6 +70,77 @@ dependencies {
 }
 ```
 
+### 적용 단위
+
+**Resilience4j는 호출하는 쪽(클라이언트)에서 메서드/API 단위로 적용합니다.**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        적용 위치                                 │
+│                                                                  │
+│  [Order Service]                      [Inventory Service]       │
+│       │                                      │                  │
+│       │  ┌─────────────────────┐             │                  │
+│       └─▶│ InventoryClient     │────────────▶│                  │
+│          │                     │             │                  │
+│          │ @Retry              │             │                  │
+│          │ @CircuitBreaker     │  ← 여기!    │                  │
+│          └─────────────────────┘             │                  │
+│                                                                  │
+│  Resilience4j는 "호출하는 쪽"에서 적용                           │
+│  (서버가 아니라 클라이언트에 설정)                               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**메서드/API 별로 다르게 설정 가능:**
+
+```java
+@Service
+public class ExternalClients {
+
+    // 재고 서비스 - 재시도 3번, 서킷 50%
+    @Retry(name = "inventoryService")
+    @CircuitBreaker(name = "inventoryService")
+    public Response callInventory() { ... }
+
+    // 결제 서비스 - 재시도 2번, 서킷 30% (더 민감)
+    @Retry(name = "paymentService")
+    @CircuitBreaker(name = "paymentService")
+    public Response callPayment() { ... }
+
+    // 알림 서비스 - 재시도만, 서킷 없음 (덜 중요)
+    @Retry(name = "notificationService")
+    public Response callNotification() { ... }
+}
+```
+
+**적용 단위 정리:**
+
+| 질문 | 답변 |
+|------|------|
+| 어디에 적용? | **호출하는 쪽** (클라이언트) |
+| 어떤 단위? | **메서드/API 단위** (인스턴스 이름으로 구분) |
+| 서비스당 하나? | 아니오, **같은 서비스라도 API별로 다르게** 설정 가능 |
+| 서버에 설정? | 아니오, **클라이언트에서 설정** |
+
+**실무 예시:**
+
+```
+Order Service (호출하는 쪽)
+├── InventoryClient
+│   ├── reserveStock()  → @CircuitBreaker("inventory-reserve")
+│   └── checkStock()    → @CircuitBreaker("inventory-check")  // 다른 설정 가능
+│
+├── PaymentClient
+│   └── processPayment() → @CircuitBreaker("payment")
+│
+└── NotificationClient
+    └── sendEmail()      → @Retry만 (서킷 없음, 덜 중요)
+```
+
+즉, **MSA 서비스 단위가 아니라**, 각 서비스 내에서 **외부 호출하는 메서드 단위**로 세밀하게 적용합니다.
+
 ---
 
 ## 3. Retry (재시도)
