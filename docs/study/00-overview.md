@@ -138,7 +138,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 |------|----------|-------------|
 | Saga 패턴 | 분산 트랜잭션을 여러 로컬 트랜잭션으로 분리 | MSA에서 데이터 일관성 보장 |
 | Resilience4j | 재시도, 타임아웃, 서킷브레이커 | 외부 서비스 장애 대응 |
-| 분산 락 | 여러 서버에서 동시 접근 제어 | 재고 차감 등 동시성 이슈 해결 |
+| 분산 락 / 세마포어 | 여러 서버에서 동시 접근 제어, 동시 요청 수 제한 | 재고 차감 등 동시성 이슈 해결, Rate Limiting |
 | 낙관적 락 | 충돌 감지 기반 동시성 제어 | DB 레벨 동시성 제어 |
 | 멱등성 | 같은 요청을 여러 번 해도 결과가 동일 | 재시도 시 중복 처리 방지 |
 | Bean Validation | 입력 값 검증 | 잘못된 요청 사전 차단 |
@@ -298,7 +298,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 ### Phase 2-A: REST 기반 Saga
 - [01-saga-pattern.md](./phase2a/01-saga-pattern.md) - Saga 패턴
 - [02-resilience4j.md](./phase2a/02-resilience4j.md) - 장애 대응
-- [03-distributed-lock.md](./phase2a/03-distributed-lock.md) - 분산 락
+- [03-distributed-lock.md](./phase2a/03-distributed-lock.md) - 분산 락 / 세마포어
 - [04-optimistic-lock.md](./phase2a/04-optimistic-lock.md) - 낙관적 락
 - [05-idempotency.md](./phase2a/05-idempotency.md) - 멱등성
 - [06-bean-validation.md](./phase2a/06-bean-validation.md) - 입력 검증

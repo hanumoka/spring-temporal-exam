@@ -355,9 +355,437 @@ try {
 
 ---
 
-## 6. 주의사항 및 베스트 프랙티스
+## 6. 세마포어 (Semaphore) 심화
 
-### 6.1 락 키 설계
+### 6.1 세마포어 vs 락
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Lock vs Semaphore                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Lock - 상호 배제]                                                  │
+│  ┌─────────┐                                                        │
+│  │ 리소스  │ ←── 오직 1개의 스레드만 접근                           │
+│  └─────────┘                                                        │
+│                                                                      │
+│  [Semaphore - 동시 접근 제한]                                        │
+│  ┌─────────┐                                                        │
+│  │ 리소스  │ ←── N개의 스레드까지 동시 접근 허용                    │
+│  └─────────┘                                                        │
+│      ▲                                                              │
+│      │ permits = 5                                                  │
+│      │                                                              │
+│  [Thread 1] ✓                                                       │
+│  [Thread 2] ✓                                                       │
+│  [Thread 3] ✓                                                       │
+│  [Thread 4] ✓                                                       │
+│  [Thread 5] ✓                                                       │
+│  [Thread 6] ✗ 대기...                                               │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+| 특성 | Lock | Semaphore |
+|------|------|-----------|
+| 동시 접근 수 | 1개 | N개 (설정 가능) |
+| 사용 목적 | 상호 배제 | 리소스 풀 제한 |
+| 재진입 | 가능 (RLock) | 불가 |
+| 소유자 | 있음 | 없음 |
+
+### 6.2 RSemaphore 기본 사용법
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ExternalApiService {
+
+    private final RedissonClient redissonClient;
+    private final RestTemplate restTemplate;
+
+    // 외부 API 동시 호출 제한 (최대 10개)
+    private static final String SEMAPHORE_KEY = "semaphore:external-api";
+    private static final int MAX_PERMITS = 10;
+
+    @PostConstruct
+    public void initSemaphore() {
+        RSemaphore semaphore = redissonClient.getSemaphore(SEMAPHORE_KEY);
+        semaphore.trySetPermits(MAX_PERMITS);  // 최초 1회만 설정됨
+        log.info("세마포어 초기화: {} (permits={})", SEMAPHORE_KEY, MAX_PERMITS);
+    }
+
+    public ApiResponse callExternalApi(ApiRequest request) {
+        RSemaphore semaphore = redissonClient.getSemaphore(SEMAPHORE_KEY);
+
+        try {
+            // 최대 5초 대기 후 permit 획득 시도
+            boolean acquired = semaphore.tryAcquire(5, TimeUnit.SECONDS);
+
+            if (!acquired) {
+                throw new TooManyRequestsException("외부 API 호출 제한 초과");
+            }
+
+            log.info("Permit 획득 - 현재 사용 가능: {}", semaphore.availablePermits());
+
+            // 외부 API 호출
+            return restTemplate.postForObject(
+                "https://external-api.com/endpoint",
+                request,
+                ApiResponse.class
+            );
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ServiceException("API 호출 중 인터럽트 발생");
+        } finally {
+            semaphore.release();
+            log.info("Permit 반환 - 현재 사용 가능: {}", semaphore.availablePermits());
+        }
+    }
+}
+```
+
+### 6.3 여러 Permit 한번에 획득
+
+```java
+public class BatchProcessor {
+
+    private final RedissonClient redissonClient;
+
+    // 배치 작업: 한번에 여러 permit 필요
+    public void processBatch(List<Task> tasks) {
+        RSemaphore semaphore = redissonClient.getSemaphore("semaphore:batch");
+
+        int requiredPermits = Math.min(tasks.size(), 5);  // 최대 5개
+
+        try {
+            // 여러 permit 한번에 획득
+            if (!semaphore.tryAcquire(requiredPermits, 10, TimeUnit.SECONDS)) {
+                throw new ResourceLimitException("배치 처리 리소스 부족");
+            }
+
+            // 병렬 처리
+            tasks.parallelStream()
+                .limit(requiredPermits)
+                .forEach(this::processTask);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ServiceException("배치 처리 중 인터럽트");
+        } finally {
+            // 획득한 만큼 반환
+            semaphore.release(requiredPermits);
+        }
+    }
+}
+```
+
+### 6.4 RPermitExpirableSemaphore (만료 가능 세마포어)
+
+permit에 TTL을 설정하여 자동 반환:
+
+```java
+@Service
+@RequiredArgsConstructor
+public class ConnectionPoolService {
+
+    private final RedissonClient redissonClient;
+
+    private static final String SEMAPHORE_KEY = "semaphore:db-connection";
+
+    public void executeWithConnection(Runnable task) {
+        RPermitExpirableSemaphore semaphore =
+            redissonClient.getPermitExpirableSemaphore(SEMAPHORE_KEY);
+
+        String permitId = null;
+
+        try {
+            // permit 획득 (30초 후 자동 만료)
+            permitId = semaphore.tryAcquire(5, 30, TimeUnit.SECONDS);
+
+            if (permitId == null) {
+                throw new ConnectionPoolExhaustedException("연결 풀 고갈");
+            }
+
+            // 작업 수행
+            task.run();
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ServiceException("연결 획득 중 인터럽트");
+        } finally {
+            // permitId로 반환 (만료되었으면 무시됨)
+            if (permitId != null) {
+                semaphore.tryRelease(permitId);
+            }
+        }
+    }
+}
+```
+
+**장점**:
+- 클라이언트 크래시 시에도 permit이 자동 반환됨
+- 좀비 permit 방지
+
+### 6.5 동적 Permit 조정
+
+```java
+@Service
+@RequiredArgsConstructor
+public class DynamicSemaphoreService {
+
+    private final RedissonClient redissonClient;
+
+    private static final String SEMAPHORE_KEY = "semaphore:dynamic";
+
+    // 운영 중 permit 수 조정
+    public void adjustPermits(int newPermits) {
+        RSemaphore semaphore = redissonClient.getSemaphore(SEMAPHORE_KEY);
+
+        int currentPermits = semaphore.availablePermits();
+        int delta = newPermits - currentPermits;
+
+        if (delta > 0) {
+            // permit 증가
+            semaphore.addPermits(delta);
+            log.info("Permit 증가: {} → {}", currentPermits, newPermits);
+        } else if (delta < 0) {
+            // permit 감소 (주의: 즉시 감소되지 않을 수 있음)
+            semaphore.reducePermits(Math.abs(delta));
+            log.info("Permit 감소 요청: {} → {}", currentPermits, newPermits);
+        }
+    }
+
+    // 현재 상태 조회
+    public SemaphoreStatus getStatus() {
+        RSemaphore semaphore = redissonClient.getSemaphore(SEMAPHORE_KEY);
+        return new SemaphoreStatus(
+            semaphore.availablePermits(),
+            // 참고: 전체 permits 조회 API는 없음, 별도 관리 필요
+            LocalDateTime.now()
+        );
+    }
+}
+```
+
+### 6.6 Rate Limiting 구현
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class RateLimitService {
+
+    private final RedissonClient redissonClient;
+
+    /**
+     * 슬라이딩 윈도우 Rate Limiter
+     *
+     * @param key 제한 키 (예: "api:user:123")
+     * @param maxRequests 윈도우 내 최대 요청 수
+     * @param windowSeconds 윈도우 크기 (초)
+     */
+    public boolean tryAcquire(String key, int maxRequests, int windowSeconds) {
+        RRateLimiter rateLimiter = redissonClient.getRateLimiter(key);
+
+        // Rate 설정 (최초 1회)
+        rateLimiter.trySetRate(
+            RateType.OVERALL,           // 전체 제한
+            maxRequests,                // 최대 요청 수
+            windowSeconds,              // 시간 윈도우
+            RateIntervalUnit.SECONDS
+        );
+
+        // permit 획득 시도 (비차단)
+        return rateLimiter.tryAcquire();
+    }
+
+    /**
+     * 사용 예시: API 엔드포인트 Rate Limiting
+     */
+    public ApiResponse callApi(String userId, ApiRequest request) {
+        String rateLimitKey = "ratelimit:api:user:" + userId;
+
+        // 분당 100개 요청 제한
+        if (!tryAcquire(rateLimitKey, 100, 60)) {
+            throw new RateLimitExceededException(
+                "요청 한도 초과. 잠시 후 다시 시도해주세요."
+            );
+        }
+
+        return processRequest(request);
+    }
+}
+```
+
+### 6.7 Semaphore vs Resilience4j RateLimiter
+
+| 특성 | RSemaphore | Resilience4j RateLimiter |
+|------|------------|-------------------------|
+| 분산 환경 | ✅ Redis 기반 | ❌ 단일 인스턴스 |
+| 설정 위치 | 코드/Redis | application.yml |
+| 동적 조정 | ✅ 런타임 가능 | ❌ 재시작 필요 |
+| 모니터링 | Redis 직접 조회 | Actuator 연동 |
+| 의존성 | Redis 필수 | 없음 |
+| 정확도 | 높음 (분산 동기화) | 인스턴스별 독립 |
+
+**선택 가이드**:
+
+```
+단일 인스턴스 or 인스턴스별 독립 제한 → Resilience4j
+다중 인스턴스 전체 제한 필요 → RSemaphore / RRateLimiter
+```
+
+### 6.8 실무 적용 패턴
+
+#### 패턴 1: 외부 API 동시 호출 제한
+
+```java
+@Service
+public class PaymentGatewayService {
+
+    private final RedissonClient redissonClient;
+
+    // PG사별로 다른 동시 호출 제한
+    public PaymentResult processPayment(PaymentRequest request) {
+        String semaphoreKey = "semaphore:pg:" + request.getPgProvider();
+        RSemaphore semaphore = redissonClient.getSemaphore(semaphoreKey);
+
+        try {
+            if (!semaphore.tryAcquire(3, TimeUnit.SECONDS)) {
+                // 대기열에 추가하거나 다른 PG로 폴백
+                return fallbackToPg(request);
+            }
+
+            return callPgApi(request);
+
+        } finally {
+            semaphore.release();
+        }
+    }
+}
+```
+
+#### 패턴 2: 리소스 풀 관리
+
+```java
+@Component
+public class FileProcessingPool {
+
+    private final RedissonClient redissonClient;
+
+    private static final int MAX_CONCURRENT_FILES = 5;
+
+    public ProcessingResult processFile(MultipartFile file) {
+        RSemaphore semaphore = redissonClient.getSemaphore("semaphore:file-processing");
+        semaphore.trySetPermits(MAX_CONCURRENT_FILES);
+
+        try {
+            if (!semaphore.tryAcquire(30, TimeUnit.SECONDS)) {
+                return ProcessingResult.queued("처리 대기 중...");
+            }
+
+            // CPU 집약적 파일 처리
+            return doHeavyProcessing(file);
+
+        } finally {
+            semaphore.release();
+        }
+    }
+}
+```
+
+#### 패턴 3: 사용자별 Rate Limiting (AOP)
+
+```java
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface RateLimit {
+    int requests() default 10;      // 최대 요청 수
+    int seconds() default 60;       // 시간 윈도우
+    String keyPrefix() default "";  // 키 접두사
+}
+
+@Aspect
+@Component
+@RequiredArgsConstructor
+public class RateLimitAspect {
+
+    private final RedissonClient redissonClient;
+
+    @Around("@annotation(rateLimit)")
+    public Object checkRateLimit(ProceedingJoinPoint joinPoint, RateLimit rateLimit)
+            throws Throwable {
+
+        String userId = getCurrentUserId();
+        String key = rateLimit.keyPrefix() + ":user:" + userId;
+
+        RRateLimiter limiter = redissonClient.getRateLimiter(key);
+        limiter.trySetRate(
+            RateType.OVERALL,
+            rateLimit.requests(),
+            rateLimit.seconds(),
+            RateIntervalUnit.SECONDS
+        );
+
+        if (!limiter.tryAcquire()) {
+            throw new RateLimitExceededException("요청 한도 초과");
+        }
+
+        return joinPoint.proceed();
+    }
+}
+
+// 사용
+@RestController
+public class ApiController {
+
+    @RateLimit(requests = 100, seconds = 60, keyPrefix = "api:order")
+    @PostMapping("/orders")
+    public OrderResponse createOrder(@RequestBody OrderRequest request) {
+        // ...
+    }
+}
+```
+
+### 6.9 세마포어 모니터링
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class SemaphoreMonitorController {
+
+    private final RedissonClient redissonClient;
+
+    @GetMapping("/admin/semaphores")
+    public List<SemaphoreInfo> getAllSemaphores() {
+        // 등록된 세마포어 키 목록 (별도 관리 필요)
+        List<String> keys = List.of(
+            "semaphore:external-api",
+            "semaphore:file-processing",
+            "semaphore:pg:nice"
+        );
+
+        return keys.stream()
+            .map(key -> {
+                RSemaphore semaphore = redissonClient.getSemaphore(key);
+                return new SemaphoreInfo(
+                    key,
+                    semaphore.availablePermits(),
+                    semaphore.isExists()
+                );
+            })
+            .toList();
+    }
+}
+```
+
+---
+
+## 7. 주의사항 및 베스트 프랙티스
+
+### 7.1 락 키 설계
 
 ```java
 // ✓ 좋은 예: 구체적인 키
@@ -368,7 +796,7 @@ try {
 "lock:inventory"  // 모든 상품이 하나의 락 공유
 ```
 
-### 6.2 leaseTime 설정
+### 7.2 leaseTime 설정
 
 ```java
 // ✗ 나쁜 예: leaseTime 없음 (영구 락 위험)
@@ -378,7 +806,7 @@ lock.lock();  // 서버 다운 시 락이 영원히 유지됨!
 lock.tryLock(10, 30, TimeUnit.SECONDS);  // 30초 후 자동 해제
 ```
 
-### 6.3 finally에서 unlock
+### 7.3 finally에서 unlock
 
 ```java
 // ✓ 필수: finally에서 락 해제
@@ -392,7 +820,7 @@ try {
 }
 ```
 
-### 6.4 isHeldByCurrentThread 체크
+### 7.4 isHeldByCurrentThread 체크
 
 ```java
 // 다른 스레드가 획득한 락을 해제하면 예외 발생
@@ -401,7 +829,7 @@ if (lock.isHeldByCurrentThread()) {
 }
 ```
 
-### 6.5 락 범위 최소화
+### 7.5 락 범위 최소화
 
 ```java
 // ✗ 나쁜 예: 불필요하게 넓은 락 범위
@@ -431,7 +859,7 @@ sendNotification();
 
 ---
 
-## 7. 우리 프로젝트 적용
+## 8. 우리 프로젝트 적용
 
 ### 재고 서비스에 분산 락 적용
 
@@ -503,11 +931,231 @@ public class InventoryService {
 }
 ```
 
+### 결제 서비스에 세마포어 적용
+
+```java
+// service-payment/src/main/java/com/example/payment/service/PaymentService.java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class PaymentService {
+
+    private final RedissonClient redissonClient;
+    private final PaymentRepository paymentRepository;
+    private final PaymentGatewayClient pgClient;  // 외부 PG사 API 클라이언트
+
+    // PG사별 동시 호출 제한
+    private static final String SEMAPHORE_PREFIX = "semaphore:pg:";
+    private static final int MAX_CONCURRENT_CALLS = 10;  // 동시 최대 10개 요청
+
+    @PostConstruct
+    public void initSemaphores() {
+        // 사용하는 PG사별로 세마포어 초기화
+        List<String> pgProviders = List.of("toss", "nice", "kg");
+        for (String provider : pgProviders) {
+            RSemaphore semaphore = redissonClient.getSemaphore(SEMAPHORE_PREFIX + provider);
+            semaphore.trySetPermits(MAX_CONCURRENT_CALLS);
+            log.info("PG 세마포어 초기화: {} (permits={})", provider, MAX_CONCURRENT_CALLS);
+        }
+    }
+
+    @Transactional
+    public PaymentResponse processPayment(PaymentRequest request) {
+        String pgProvider = request.pgProvider();  // "toss", "nice", "kg"
+        String semaphoreKey = SEMAPHORE_PREFIX + pgProvider;
+        RSemaphore semaphore = redissonClient.getSemaphore(semaphoreKey);
+
+        try {
+            // 세마포어 획득 시도 (최대 5초 대기)
+            boolean acquired = semaphore.tryAcquire(5, TimeUnit.SECONDS);
+
+            if (!acquired) {
+                log.warn("PG 호출 제한 초과: {}", pgProvider);
+                throw new PaymentThrottledException(
+                    "결제 요청이 많습니다. 잠시 후 다시 시도해주세요."
+                );
+            }
+
+            log.info("PG 세마포어 획득: {} (available={})",
+                pgProvider, semaphore.availablePermits());
+
+            // 결제 정보 생성
+            Payment payment = Payment.create(
+                request.orderId(),
+                request.amount(),
+                pgProvider
+            );
+
+            // 외부 PG사 API 호출
+            PgResponse pgResponse = pgClient.requestPayment(
+                pgProvider,
+                request.amount(),
+                request.cardInfo()
+            );
+
+            // 결제 결과 저장
+            payment.complete(pgResponse.transactionId());
+            paymentRepository.save(payment);
+
+            log.info("결제 완료: paymentId={}, txId={}",
+                payment.getId(), pgResponse.transactionId());
+
+            return PaymentResponse.success(payment);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PaymentException("결제 처리 중 인터럽트 발생");
+        } catch (PgApiException e) {
+            log.error("PG API 오류: {}", e.getMessage());
+            throw new PaymentException("결제 처리 실패: " + e.getMessage());
+        } finally {
+            // 세마포어 반환
+            semaphore.release();
+            log.debug("PG 세마포어 반환: {} (available={})",
+                pgProvider, semaphore.availablePermits());
+        }
+    }
+
+    // 결제 취소 (환불)도 동일하게 세마포어 적용
+    @Transactional
+    public RefundResponse refundPayment(RefundRequest request) {
+        Payment payment = paymentRepository.findById(request.paymentId())
+            .orElseThrow(() -> new PaymentNotFoundException(request.paymentId()));
+
+        String semaphoreKey = SEMAPHORE_PREFIX + payment.getPgProvider();
+        RSemaphore semaphore = redissonClient.getSemaphore(semaphoreKey);
+
+        try {
+            if (!semaphore.tryAcquire(5, TimeUnit.SECONDS)) {
+                throw new PaymentThrottledException("환불 요청이 많습니다.");
+            }
+
+            // 외부 PG사 환불 API 호출
+            pgClient.requestRefund(payment.getPgProvider(), payment.getTransactionId());
+
+            payment.refund();
+            paymentRepository.save(payment);
+
+            return RefundResponse.success(payment);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PaymentException("환불 처리 중 인터럽트 발생");
+        } finally {
+            semaphore.release();
+        }
+    }
+}
+```
+
+### 알림 서비스에 세마포어 적용
+
+```java
+// service-notification/src/main/java/com/example/notification/service/NotificationService.java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class NotificationService {
+
+    private final RedissonClient redissonClient;
+
+    // 채널별 동시 발송 제한
+    private static final Map<String, Integer> CHANNEL_LIMITS = Map.of(
+        "sms", 5,       // SMS: 동시 5건
+        "email", 20,    // Email: 동시 20건
+        "push", 50      // Push: 동시 50건
+    );
+
+    @PostConstruct
+    public void initSemaphores() {
+        CHANNEL_LIMITS.forEach((channel, permits) -> {
+            RSemaphore semaphore = redissonClient.getSemaphore("semaphore:notification:" + channel);
+            semaphore.trySetPermits(permits);
+            log.info("알림 세마포어 초기화: {} (permits={})", channel, permits);
+        });
+    }
+
+    public void sendNotification(NotificationRequest request) {
+        String channel = request.channel();  // "sms", "email", "push"
+        String semaphoreKey = "semaphore:notification:" + channel;
+        RSemaphore semaphore = redissonClient.getSemaphore(semaphoreKey);
+
+        try {
+            // 채널별 세마포어 획득 (최대 10초 대기)
+            if (!semaphore.tryAcquire(10, TimeUnit.SECONDS)) {
+                log.warn("알림 발송 제한 초과: {}", channel);
+                // 대기열에 추가하거나 나중에 재시도
+                throw new NotificationThrottledException(
+                    "알림 발송이 지연되고 있습니다."
+                );
+            }
+
+            log.info("{} 세마포어 획득 (available={})", channel, semaphore.availablePermits());
+
+            // 채널별 발송 처리
+            switch (channel) {
+                case "sms" -> sendSms(request);
+                case "email" -> sendEmail(request);
+                case "push" -> sendPush(request);
+            }
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new NotificationException("알림 발송 중 인터럽트 발생");
+        } finally {
+            semaphore.release();
+        }
+    }
+
+    private void sendSms(NotificationRequest request) {
+        // SMS 발송 API 호출
+    }
+
+    private void sendEmail(NotificationRequest request) {
+        // 이메일 발송 API 호출
+    }
+
+    private void sendPush(NotificationRequest request) {
+        // 푸시 알림 발송
+    }
+}
+```
+
+### 프로젝트 동시성 제어 요약
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    서비스별 동시성 제어 전략                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Inventory Service]                                                 │
+│  ├── 메커니즘: 분산 락 (RLock)                                       │
+│  ├── 대상: 상품별 재고 차감                                          │
+│  └── 이유: 동일 상품 재고는 순차 처리 필수                            │
+│                                                                      │
+│  [Order Service]                                                     │
+│  ├── 메커니즘: 낙관적 락 (@Version)                                  │
+│  ├── 대상: 주문 상태 변경                                            │
+│  └── 이유: 충돌 드묾, 충돌 시 재시도 가능                             │
+│                                                                      │
+│  [Payment Service]                                                   │
+│  ├── 메커니즘: 세마포어 (RSemaphore)                                 │
+│  ├── 대상: PG사별 API 호출                                           │
+│  └── 이유: 외부 API TPS 제한 준수                                    │
+│                                                                      │
+│  [Notification Service]                                              │
+│  ├── 메커니즘: 세마포어 (RSemaphore)                                 │
+│  ├── 대상: 채널별 발송 (SMS, Email, Push)                            │
+│  └── 이유: 외부 API 호출 제한 준수                                   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
-## 8. 타임아웃 이슈 및 대응 전략
+## 9. 타임아웃 이슈 및 대응 전략
 
-### 8.1 타임아웃 레이어 구조
+### 9.1 타임아웃 레이어 구조
 
 분산 락 사용 시 여러 레이어의 타임아웃이 관련됩니다:
 
@@ -536,7 +1184,7 @@ public class InventoryService {
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 8.2 Case 1: 분산 락 획득 실패 (waitTime 초과)
+### 9.2 Case 1: 분산 락 획득 실패 (waitTime 초과)
 
 **상황**: 다른 서버가 락을 오래 잡고 있어서 waitTime 내에 획득 불가
 
@@ -615,7 +1263,7 @@ public class GlobalExceptionHandler {
 }
 ```
 
-### 8.3 Case 2: 락 보유 중 HTTP 타임아웃
+### 9.3 Case 2: 락 보유 중 HTTP 타임아웃
 
 **상황**: 락 획득 후 작업 중 클라이언트가 HTTP 타임아웃으로 연결 종료
 
@@ -662,7 +1310,7 @@ public class InventoryController {
 }
 ```
 
-### 8.4 Case 3: 락 보유 중 leaseTime 만료
+### 9.4 Case 3: 락 보유 중 leaseTime 만료
 
 **상황**: 작업이 예상보다 오래 걸려 leaseTime 만료
 
@@ -737,7 +1385,7 @@ public ReservationResponse reserveStock(ReservationRequest request) {
 }
 ```
 
-### 8.5 Case 4: DB 트랜잭션 타임아웃
+### 9.5 Case 4: DB 트랜잭션 타임아웃
 
 **상황**: 락 보유 중 DB 트랜잭션 타임아웃으로 롤백
 
@@ -777,7 +1425,7 @@ public class InventoryService {
 }
 ```
 
-### 8.6 타임아웃 설정 권장 가이드
+### 9.6 타임아웃 설정 권장 가이드
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -824,7 +1472,7 @@ server:
     connection-timeout: 30s
 ```
 
-### 8.7 타임아웃 대응 체크리스트
+### 9.7 타임아웃 대응 체크리스트
 
 ```
 □ 타임아웃 계층 설정
@@ -856,9 +1504,9 @@ server:
 
 ---
 
-## 9. 테스트
+## 10. 테스트
 
-### 9.1 동시성 테스트
+### 10.1 동시성 테스트
 
 ```java
 @SpringBootTest
@@ -907,14 +1555,26 @@ class InventoryServiceConcurrencyTest {
 
 ---
 
-## 10. 실습 과제
+## 11. 실습 과제
 
+### 분산 락 (Inventory Service)
 1. Redisson 의존성 추가
 2. 재고 서비스에 분산 락 적용
 3. 동시 요청 테스트 작성
 4. 락 획득 실패 시나리오 테스트
 5. 락 타임아웃 시나리오 테스트
 6. 타임아웃 계층 설정 및 검증
+
+### 세마포어 (Payment Service)
+7. PG사별 세마포어 초기화 구현
+8. 결제 서비스에 세마포어 적용
+9. 동시 결제 요청 제한 테스트 작성
+10. 세마포어 획득 실패 시 적절한 응답 반환
+
+### 세마포어 (Notification Service)
+11. 채널별 세마포어 초기화 구현
+12. 알림 발송에 세마포어 적용
+13. 동시 발송 제한 테스트 작성
 
 ---
 
