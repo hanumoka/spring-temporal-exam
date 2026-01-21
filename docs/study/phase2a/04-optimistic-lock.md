@@ -467,13 +467,451 @@ public class Order {
 
 ---
 
-## 8. 실습 과제
+## 8. MyBatis 기반 구현
 
+JPA @Version은 내부 동작이 추상화되어 있습니다. 쿼리 레벨의 이해를 위해 MyBatis로 직접 구현해봅니다.
+
+### 8.1 왜 MyBatis로도 학습하는가?
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    JPA vs MyBatis 학습 포인트                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [JPA @Version]                                                      │
+│  ├── 장점: 선언적, 간편함                                            │
+│  ├── 단점: 내부 동작이 숨겨짐                                        │
+│  └── 학습: "어떻게 동작하는지" 이해 어려움                           │
+│                                                                      │
+│  [MyBatis 직접 구현]                                                 │
+│  ├── 장점: SQL 직접 작성, 동작 원리 명확                             │
+│  ├── 단점: 보일러플레이트 코드                                       │
+│  └── 학습: WHERE version = ? 조건의 의미 체감                        │
+│                                                                      │
+│  권장: 두 방식 모두 학습하여 원리 이해 + 실무 적용                    │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 테이블 스키마
+
+```sql
+-- V3__create_orders_table.sql
+CREATE TABLE orders (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_number VARCHAR(50) NOT NULL UNIQUE,
+    customer_id BIGINT NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    total_amount DECIMAL(15, 2) NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,  -- 낙관적 락용 버전
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME,
+
+    INDEX idx_order_number (order_number),
+    INDEX idx_customer_id (customer_id)
+);
+```
+
+### 8.3 도메인 객체
+
+```java
+// MyBatis용 도메인 (JPA 어노테이션 없음)
+@Getter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class Order {
+    private Long id;
+    private String orderNumber;
+    private Long customerId;
+    private OrderStatus status;
+    private BigDecimal totalAmount;
+    private Long version;  // 버전 필드
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+
+    public void confirm() {
+        if (this.status != OrderStatus.PENDING) {
+            throw new IllegalStateException("PENDING 상태만 확정 가능합니다");
+        }
+        this.status = OrderStatus.CONFIRMED;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void cancel() {
+        if (this.status == OrderStatus.CONFIRMED) {
+            throw new IllegalStateException("확정된 주문은 취소할 수 없습니다");
+        }
+        this.status = OrderStatus.CANCELLED;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    // 버전 증가 (MyBatis에서는 직접 관리)
+    public void incrementVersion() {
+        this.version = this.version + 1;
+    }
+}
+```
+
+### 8.4 Mapper 인터페이스
+
+```java
+@Mapper
+public interface OrderMapper {
+
+    // 기본 조회
+    Optional<Order> findById(Long id);
+
+    Optional<Order> findByOrderNumber(String orderNumber);
+
+    // 삽입
+    void insert(Order order);
+
+    // 낙관적 락 업데이트 (핵심!)
+    // 반환값: 업데이트된 행 수 (0이면 충돌)
+    int updateWithVersion(Order order);
+
+    // 상태만 업데이트 (버전 체크 포함)
+    int updateStatus(
+        @Param("id") Long id,
+        @Param("status") OrderStatus status,
+        @Param("version") Long version
+    );
+
+    // 비관적 락 조회 (비교용)
+    @Select("SELECT * FROM orders WHERE id = #{id} FOR UPDATE")
+    Optional<Order> findByIdForUpdate(Long id);
+}
+```
+
+### 8.5 Mapper XML
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.order.mapper.OrderMapper">
+
+    <resultMap id="OrderResultMap" type="com.example.order.domain.Order">
+        <id property="id" column="id"/>
+        <result property="orderNumber" column="order_number"/>
+        <result property="customerId" column="customer_id"/>
+        <result property="status" column="status"/>
+        <result property="totalAmount" column="total_amount"/>
+        <result property="version" column="version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <!-- 기본 조회 -->
+    <select id="findById" resultMap="OrderResultMap">
+        SELECT id, order_number, customer_id, status, total_amount,
+               version, created_at, updated_at
+        FROM orders
+        WHERE id = #{id}
+    </select>
+
+    <select id="findByOrderNumber" resultMap="OrderResultMap">
+        SELECT id, order_number, customer_id, status, total_amount,
+               version, created_at, updated_at
+        FROM orders
+        WHERE order_number = #{orderNumber}
+    </select>
+
+    <!-- 삽입 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO orders (
+            order_number, customer_id, status, total_amount,
+            version, created_at, updated_at
+        ) VALUES (
+            #{orderNumber}, #{customerId}, #{status}, #{totalAmount},
+            0, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+        낙관적 락 업데이트 (핵심!)
+
+        WHERE version = #{version} 조건이 핵심입니다:
+        - 다른 트랜잭션이 먼저 수정했다면 version이 달라져서 0 rows affected
+        - 0 rows면 OptimisticLockException을 던져야 함
+    -->
+    <update id="updateWithVersion">
+        UPDATE orders
+        SET status = #{status},
+            total_amount = #{totalAmount},
+            version = version + 1,        <!-- 버전 증가 -->
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND version = #{version}        <!-- 버전 체크! -->
+    </update>
+
+    <!-- 상태만 업데이트 (간단 버전) -->
+    <update id="updateStatus">
+        UPDATE orders
+        SET status = #{status},
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = #{id}
+          AND version = #{version}
+    </update>
+
+</mapper>
+```
+
+### 8.6 서비스 구현
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class OrderService {
+
+    private final OrderMapper orderMapper;
+
+    private static final int MAX_RETRIES = 3;
+
+    /**
+     * 주문 확정 (낙관적 락 + 재시도)
+     */
+    @Transactional
+    public void confirmOrder(Long orderId) {
+        int attempt = 0;
+
+        while (attempt < MAX_RETRIES) {
+            try {
+                doConfirmOrder(orderId);
+                return;  // 성공!
+
+            } catch (OptimisticLockException e) {
+                attempt++;
+                log.warn("낙관적 락 충돌, 재시도 {}/{}: orderId={}",
+                    attempt, MAX_RETRIES, orderId);
+
+                if (attempt >= MAX_RETRIES) {
+                    throw new ConcurrentModificationException(
+                        "동시 수정으로 인해 처리 실패 (재시도 " + MAX_RETRIES + "회 초과)"
+                    );
+                }
+
+                // 잠시 대기 후 재시도 (지수 백오프)
+                sleep(100L * attempt);
+            }
+        }
+    }
+
+    private void doConfirmOrder(Long orderId) {
+        // 1. 주문 조회
+        Order order = orderMapper.findById(orderId)
+            .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        log.info("주문 조회: id={}, version={}", order.getId(), order.getVersion());
+
+        // 2. 상태 변경
+        order.confirm();
+
+        // 3. 낙관적 락 업데이트
+        int updatedRows = orderMapper.updateWithVersion(order);
+
+        // 4. 충돌 감지 (핵심!)
+        if (updatedRows == 0) {
+            // version이 맞지 않아 업데이트 실패 = 다른 트랜잭션이 먼저 수정함
+            throw new OptimisticLockException(
+                "주문이 다른 사용자에 의해 수정되었습니다: orderId=" + orderId
+            );
+        }
+
+        log.info("주문 확정 완료: id={}, newVersion={}",
+            order.getId(), order.getVersion() + 1);
+    }
+
+    /**
+     * 간단 버전: 상태만 업데이트
+     */
+    @Transactional
+    public void updateOrderStatus(Long orderId, OrderStatus newStatus, Long expectedVersion) {
+        int updatedRows = orderMapper.updateStatus(orderId, newStatus, expectedVersion);
+
+        if (updatedRows == 0) {
+            // 업데이트 실패 - 버전 불일치 또는 존재하지 않음
+            Order current = orderMapper.findById(orderId).orElse(null);
+
+            if (current == null) {
+                throw new OrderNotFoundException(orderId);
+            }
+
+            throw new OptimisticLockException(
+                String.format("버전 충돌: expected=%d, actual=%d",
+                    expectedVersion, current.getVersion())
+            );
+        }
+    }
+
+    private void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+```
+
+### 8.7 커스텀 예외
+
+```java
+/**
+ * 낙관적 락 충돌 예외
+ */
+public class OptimisticLockException extends RuntimeException {
+    public OptimisticLockException(String message) {
+        super(message);
+    }
+}
+
+/**
+ * 동시 수정 예외 (재시도 초과)
+ */
+public class ConcurrentModificationException extends RuntimeException {
+    public ConcurrentModificationException(String message) {
+        super(message);
+    }
+}
+```
+
+### 8.8 테스트
+
+```java
+@SpringBootTest
+class OrderServiceOptimisticLockTest {
+
+    @Autowired
+    private OrderService orderService;
+
+    @Autowired
+    private OrderMapper orderMapper;
+
+    @Test
+    @DisplayName("동시 수정 시 낙관적 락이 충돌을 감지한다")
+    void optimisticLock_detectsConflict() throws Exception {
+        // given: 주문 생성
+        Order order = Order.builder()
+            .orderNumber("ORD-001")
+            .customerId(1L)
+            .status(OrderStatus.PENDING)
+            .totalAmount(new BigDecimal("10000"))
+            .createdAt(LocalDateTime.now())
+            .build();
+        orderMapper.insert(order);
+        Long orderId = order.getId();
+
+        // when: 동시에 2개의 스레드가 같은 주문을 수정
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch latch = new CountDownLatch(2);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failCount = new AtomicInteger(0);
+
+        for (int i = 0; i < 2; i++) {
+            executor.submit(() -> {
+                try {
+                    orderService.confirmOrder(orderId);
+                    successCount.incrementAndGet();
+                } catch (Exception e) {
+                    failCount.incrementAndGet();
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        latch.await();
+        executor.shutdown();
+
+        // then: 하나는 성공, 하나는 실패 (또는 재시도 후 성공)
+        Order result = orderMapper.findById(orderId).orElseThrow();
+        assertThat(result.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        assertThat(result.getVersion()).isGreaterThan(0L);
+    }
+
+    @Test
+    @DisplayName("버전이 맞지 않으면 업데이트가 실패한다")
+    void updateWithWrongVersion_fails() {
+        // given
+        Order order = Order.builder()
+            .orderNumber("ORD-002")
+            .customerId(1L)
+            .status(OrderStatus.PENDING)
+            .totalAmount(new BigDecimal("10000"))
+            .createdAt(LocalDateTime.now())
+            .build();
+        orderMapper.insert(order);
+
+        // when: 잘못된 버전으로 업데이트 시도
+        Long wrongVersion = 999L;
+
+        // then
+        assertThatThrownBy(() ->
+            orderService.updateOrderStatus(order.getId(), OrderStatus.CONFIRMED, wrongVersion)
+        ).isInstanceOf(OptimisticLockException.class);
+    }
+}
+```
+
+### 8.9 JPA vs MyBatis 비교
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    동일한 동작, 다른 구현                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [JPA 방식]                                                          │
+│                                                                      │
+│  @Entity                                                             │
+│  public class Order {                                                │
+│      @Version                                                        │
+│      private Long version;   // 선언만 하면 자동 처리                 │
+│  }                                                                   │
+│                                                                      │
+│  orderRepository.save(order);  // 내부적으로 WHERE version 체크       │
+│                                                                      │
+│  → OptimisticLockingFailureException 자동 발생                       │
+│                                                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [MyBatis 방식]                                                      │
+│                                                                      │
+│  <update id="updateWithVersion">                                     │
+│      UPDATE orders                                                   │
+│      SET status = #{status}, version = version + 1                   │
+│      WHERE id = #{id} AND version = #{version}  // 직접 작성!        │
+│  </update>                                                           │
+│                                                                      │
+│  int rows = orderMapper.updateWithVersion(order);                    │
+│  if (rows == 0) {                                                    │
+│      throw new OptimisticLockException(...);  // 직접 처리!          │
+│  }                                                                   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. 실습 과제
+
+### JPA 실습
 1. Order 엔티티에 @Version 필드 추가
 2. 동시 수정 시나리오 테스트 작성
 3. OptimisticLockingFailureException 처리
 4. Spring Retry로 재시도 구현
 5. 분산 락 + 낙관적 락 조합 구현
+
+### MyBatis 실습
+6. version 컬럼이 있는 orders 테이블 생성 (Flyway)
+7. OrderMapper XML에 updateWithVersion 쿼리 작성
+8. 업데이트 결과가 0일 때 OptimisticLockException 처리
+9. 수동 재시도 로직 구현 (지수 백오프)
+10. 동시 수정 테스트로 충돌 감지 확인
 
 ---
 

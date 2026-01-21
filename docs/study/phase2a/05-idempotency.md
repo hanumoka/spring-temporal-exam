@@ -561,13 +561,475 @@ public class PaymentController {
 
 ---
 
-## 8. 실습 과제
+## 8. MyBatis 기반 구현
 
+### 8.1 왜 MyBatis로도 학습하는가?
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    멱등성 쿼리 학습 포인트                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [JPA 방식]                                                          │
+│  repository.save(record);  // unique constraint로 중복 방지          │
+│  → 내부에서 INSERT/UPDATE 어떻게 처리되는지 모름                      │
+│                                                                      │
+│  [MyBatis 방식]                                                      │
+│  INSERT IGNORE INTO ...     // 중복 시 무시                          │
+│  ON DUPLICATE KEY UPDATE    // 중복 시 업데이트                      │
+│  SELECT ... FOR UPDATE      // 락 걸고 조회                          │
+│  → SQL 레벨에서 중복 방지 원리 체감                                   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 테이블 스키마
+
+```sql
+-- V4__create_idempotency_keys_table.sql
+CREATE TABLE idempotency_keys (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    idempotency_key VARCHAR(64) NOT NULL,
+    request_path VARCHAR(255) NOT NULL,
+    request_hash VARCHAR(64),           -- 요청 본문 해시 (선택)
+    response_status INT,
+    response_body TEXT,
+    processing BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+
+    UNIQUE KEY uk_idempotency_key (idempotency_key),
+    INDEX idx_expires_at (expires_at)
+) ENGINE=InnoDB;
+```
+
+### 8.3 도메인 객체
+
+```java
+@Getter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class IdempotencyRecord {
+    private Long id;
+    private String idempotencyKey;
+    private String requestPath;
+    private String requestHash;
+    private Integer responseStatus;
+    private String responseBody;
+    private boolean processing;
+    private LocalDateTime createdAt;
+    private LocalDateTime expiresAt;
+
+    public boolean isExpired() {
+        return expiresAt.isBefore(LocalDateTime.now());
+    }
+
+    public boolean isCompleted() {
+        return !processing && responseStatus != null;
+    }
+}
+```
+
+### 8.4 Mapper 인터페이스
+
+```java
+@Mapper
+public interface IdempotencyMapper {
+
+    // 기존 키 조회 (락 포함)
+    Optional<IdempotencyRecord> findByKeyForUpdate(String idempotencyKey);
+
+    // 기존 키 조회 (락 없음)
+    Optional<IdempotencyRecord> findByKey(String idempotencyKey);
+
+    // 새 키 등록 (중복 시 무시)
+    int insertIgnore(IdempotencyRecord record);
+
+    // 처리 완료 업데이트
+    int updateResponse(
+        @Param("idempotencyKey") String idempotencyKey,
+        @Param("responseStatus") int responseStatus,
+        @Param("responseBody") String responseBody
+    );
+
+    // 만료된 키 삭제
+    int deleteExpired();
+
+    // 처리 중 상태 해제 (타임아웃 복구용)
+    int releaseStaleProcessing(@Param("threshold") LocalDateTime threshold);
+}
+```
+
+### 8.5 Mapper XML
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.payment.mapper.IdempotencyMapper">
+
+    <resultMap id="IdempotencyResultMap" type="com.example.payment.domain.IdempotencyRecord">
+        <id property="id" column="id"/>
+        <result property="idempotencyKey" column="idempotency_key"/>
+        <result property="requestPath" column="request_path"/>
+        <result property="requestHash" column="request_hash"/>
+        <result property="responseStatus" column="response_status"/>
+        <result property="responseBody" column="response_body"/>
+        <result property="processing" column="processing"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="expiresAt" column="expires_at"/>
+    </resultMap>
+
+    <!--
+        락을 걸고 조회 (동시 요청 처리용)
+        FOR UPDATE: 다른 트랜잭션이 같은 키를 동시에 처리하는 것 방지
+    -->
+    <select id="findByKeyForUpdate" resultMap="IdempotencyResultMap">
+        SELECT id, idempotency_key, request_path, request_hash,
+               response_status, response_body, processing, created_at, expires_at
+        FROM idempotency_keys
+        WHERE idempotency_key = #{idempotencyKey}
+        FOR UPDATE
+    </select>
+
+    <!-- 락 없이 조회 (캐시된 응답 반환용) -->
+    <select id="findByKey" resultMap="IdempotencyResultMap">
+        SELECT id, idempotency_key, request_path, request_hash,
+               response_status, response_body, processing, created_at, expires_at
+        FROM idempotency_keys
+        WHERE idempotency_key = #{idempotencyKey}
+    </select>
+
+    <!--
+        INSERT IGNORE: 중복 키가 있으면 무시 (에러 없이 0 rows affected)
+
+        중요: unique key 충돌 시 INSERT 실패하지 않고 무시됨
+        → affected rows로 신규 삽입 여부 판단
+    -->
+    <insert id="insertIgnore">
+        INSERT IGNORE INTO idempotency_keys (
+            idempotency_key, request_path, request_hash,
+            processing, created_at, expires_at
+        ) VALUES (
+            #{idempotencyKey}, #{requestPath}, #{requestHash},
+            TRUE, #{createdAt}, #{expiresAt}
+        )
+    </insert>
+
+    <!--
+        대안: ON DUPLICATE KEY UPDATE
+        중복 시 특정 필드만 업데이트 (upsert 패턴)
+    -->
+    <insert id="upsert">
+        INSERT INTO idempotency_keys (
+            idempotency_key, request_path, request_hash,
+            processing, created_at, expires_at
+        ) VALUES (
+            #{idempotencyKey}, #{requestPath}, #{requestHash},
+            TRUE, #{createdAt}, #{expiresAt}
+        )
+        ON DUPLICATE KEY UPDATE
+            request_path = VALUES(request_path),
+            created_at = created_at  <!-- 기존 값 유지 (dummy update) -->
+    </insert>
+
+    <!-- 처리 완료 후 응답 저장 -->
+    <update id="updateResponse">
+        UPDATE idempotency_keys
+        SET response_status = #{responseStatus},
+            response_body = #{responseBody},
+            processing = FALSE
+        WHERE idempotency_key = #{idempotencyKey}
+          AND processing = TRUE
+    </update>
+
+    <!-- 만료된 키 삭제 (스케줄러용) -->
+    <delete id="deleteExpired">
+        DELETE FROM idempotency_keys
+        WHERE expires_at &lt; NOW()
+    </delete>
+
+    <!-- 처리 중 상태로 오래 남은 레코드 해제 (장애 복구용) -->
+    <update id="releaseStaleProcessing">
+        UPDATE idempotency_keys
+        SET processing = FALSE
+        WHERE processing = TRUE
+          AND created_at &lt; #{threshold}
+    </update>
+
+</mapper>
+```
+
+### 8.6 서비스 구현
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class IdempotencyService {
+
+    private final IdempotencyMapper idempotencyMapper;
+    private final ObjectMapper objectMapper;
+
+    private static final Duration DEFAULT_TTL = Duration.ofHours(24);
+
+    /**
+     * 멱등성 키 확인 및 등록
+     *
+     * @return Optional.empty() = 새 요청, 처리 진행
+     *         Optional.present() = 캐시된 응답 반환
+     */
+    @Transactional
+    public Optional<IdempotencyRecord> checkAndLock(String key, String path, String requestBody) {
+
+        // 1. INSERT IGNORE로 새 키 등록 시도
+        IdempotencyRecord newRecord = IdempotencyRecord.builder()
+            .idempotencyKey(key)
+            .requestPath(path)
+            .requestHash(hash(requestBody))
+            .createdAt(LocalDateTime.now())
+            .expiresAt(LocalDateTime.now().plus(DEFAULT_TTL))
+            .build();
+
+        int inserted = idempotencyMapper.insertIgnore(newRecord);
+
+        if (inserted > 0) {
+            // 신규 삽입 성공 → 새 요청
+            log.info("새 멱등성 키 등록: {}", key);
+            return Optional.empty();
+        }
+
+        // 2. 기존 키 존재 → 락 걸고 조회
+        Optional<IdempotencyRecord> existing = idempotencyMapper.findByKeyForUpdate(key);
+
+        if (existing.isEmpty()) {
+            // 동시에 삭제됨 (드문 케이스)
+            throw new IdempotencyConflictException("키 상태 불일치");
+        }
+
+        IdempotencyRecord record = existing.get();
+
+        // 3. 만료 확인
+        if (record.isExpired()) {
+            log.info("만료된 키 재사용: {}", key);
+            // 만료된 키는 새로 처리 (삭제 후 재삽입 또는 업데이트)
+            return Optional.empty();
+        }
+
+        // 4. 처리 중인지 확인
+        if (record.isProcessing()) {
+            throw new IdempotencyConflictException("이전 요청이 처리 중입니다");
+        }
+
+        // 5. 요청 본문 일치 확인 (선택)
+        if (!record.getRequestHash().equals(hash(requestBody))) {
+            throw new IdempotencyMismatchException("같은 키로 다른 요청 전송됨");
+        }
+
+        // 6. 캐시된 응답 반환
+        log.info("캐시된 응답 반환: {}", key);
+        return existing;
+    }
+
+    /**
+     * 처리 완료 후 응답 저장
+     */
+    @Transactional
+    public void complete(String key, int status, Object response) {
+        try {
+            String responseBody = objectMapper.writeValueAsString(response);
+            int updated = idempotencyMapper.updateResponse(key, status, responseBody);
+
+            if (updated == 0) {
+                log.warn("멱등성 키 업데이트 실패 (이미 완료됨?): {}", key);
+            }
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("응답 직렬화 실패", e);
+        }
+    }
+
+    private String hash(String content) {
+        if (content == null) return "";
+        return DigestUtils.sha256Hex(content);
+    }
+}
+```
+
+### 8.7 동시 요청 처리 흐름
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    동시 요청 처리 (FOR UPDATE 활용)                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [요청 A]                     [요청 B] (같은 키)                      │
+│     │                            │                                   │
+│     │ INSERT IGNORE             │                                   │
+│     │ (성공, 1 row)             │                                   │
+│     │                            │ INSERT IGNORE                     │
+│     │                            │ (실패, 0 row - 중복)              │
+│     │                            │                                   │
+│     │ 처리 중...                 │ SELECT ... FOR UPDATE             │
+│     │                            │ (락 대기...)                      │
+│     │                            │      │                            │
+│     │ UPDATE (완료)              │      │                            │
+│     │ COMMIT                     │      │                            │
+│     │                            │ ◀────┘ (락 획득)                  │
+│     │                            │                                   │
+│     │                            │ processing=FALSE 확인             │
+│     │                            │ → 캐시된 응답 반환                 │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.8 테스트
+
+```java
+@SpringBootTest
+class IdempotencyServiceTest {
+
+    @Autowired
+    private IdempotencyService idempotencyService;
+
+    @Autowired
+    private IdempotencyMapper idempotencyMapper;
+
+    @Test
+    @DisplayName("INSERT IGNORE로 중복 요청이 무시된다")
+    void insertIgnore_ignoresDuplicate() {
+        String key = "test-key-001";
+        String path = "/payments";
+        String body = "{\"amount\": 10000}";
+
+        // 첫 번째 요청 - 신규 등록
+        Optional<IdempotencyRecord> first = idempotencyService.checkAndLock(key, path, body);
+        assertThat(first).isEmpty();  // 새 요청
+
+        // 완료 처리
+        idempotencyService.complete(key, 200, Map.of("status", "success"));
+
+        // 두 번째 요청 - 캐시 반환
+        Optional<IdempotencyRecord> second = idempotencyService.checkAndLock(key, path, body);
+        assertThat(second).isPresent();
+        assertThat(second.get().getResponseStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("같은 키로 다른 요청 본문이 오면 예외 발생")
+    void differentRequestBody_throwsException() {
+        String key = "test-key-002";
+
+        idempotencyService.checkAndLock(key, "/payments", "{\"amount\": 10000}");
+        idempotencyService.complete(key, 200, "OK");
+
+        // 같은 키, 다른 본문
+        assertThatThrownBy(() ->
+            idempotencyService.checkAndLock(key, "/payments", "{\"amount\": 20000}")
+        ).isInstanceOf(IdempotencyMismatchException.class);
+    }
+
+    @Test
+    @DisplayName("동시 요청 시 하나만 처리된다")
+    void concurrentRequests_onlyOneProcessed() throws Exception {
+        String key = "test-key-003";
+        String path = "/payments";
+        String body = "{\"amount\": 10000}";
+
+        ExecutorService executor = Executors.newFixedThreadPool(10);
+        CountDownLatch latch = new CountDownLatch(10);
+        AtomicInteger newRequests = new AtomicInteger(0);
+        AtomicInteger cachedResponses = new AtomicInteger(0);
+
+        for (int i = 0; i < 10; i++) {
+            executor.submit(() -> {
+                try {
+                    Optional<IdempotencyRecord> result =
+                        idempotencyService.checkAndLock(key, path, body);
+
+                    if (result.isEmpty()) {
+                        newRequests.incrementAndGet();
+                        Thread.sleep(100);  // 처리 시뮬레이션
+                        idempotencyService.complete(key, 200, "OK");
+                    } else {
+                        cachedResponses.incrementAndGet();
+                    }
+                } catch (IdempotencyConflictException e) {
+                    // 처리 중 충돌 - 재시도 필요
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        latch.await();
+        executor.shutdown();
+
+        // 정확히 1개만 신규 처리
+        assertThat(newRequests.get()).isEqualTo(1);
+    }
+}
+```
+
+### 8.9 JPA vs MyBatis 비교
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    멱등성 구현 비교                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [JPA 방식]                                                          │
+│                                                                      │
+│  try {                                                               │
+│      repository.save(record);  // INSERT 시도                        │
+│  } catch (DataIntegrityViolationException e) {                       │
+│      // unique 제약조건 위반 → 중복                                  │
+│      return repository.findByKey(key);                               │
+│  }                                                                   │
+│                                                                      │
+│  → 예외 기반 처리, 성능 이슈 가능                                    │
+│                                                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [MyBatis 방식]                                                      │
+│                                                                      │
+│  int inserted = mapper.insertIgnore(record);                         │
+│  if (inserted == 0) {                                                │
+│      // 중복 - 기존 레코드 조회                                       │
+│      return mapper.findByKeyForUpdate(key);                          │
+│  }                                                                   │
+│                                                                      │
+│  → 반환값 기반 처리, 예외 없음, 명시적                                │
+│                                                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  핵심 SQL 패턴:                                                       │
+│  • INSERT IGNORE - 중복 시 무시 (MySQL)                              │
+│  • ON DUPLICATE KEY UPDATE - 중복 시 업데이트 (MySQL)                │
+│  • INSERT ... ON CONFLICT DO NOTHING - PostgreSQL                    │
+│  • SELECT ... FOR UPDATE - 동시 접근 제어                            │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. 실습 과제
+
+### JPA 실습
 1. IdempotencyRecord 엔티티 생성
 2. IdempotencyService 구현
 3. 결제 API에 멱등성 적용
 4. 중복 요청 테스트
 5. TTL 만료 테스트
+
+### MyBatis 실습
+6. idempotency_keys 테이블 생성 (Flyway)
+7. IdempotencyMapper XML 작성 (INSERT IGNORE, FOR UPDATE)
+8. 반환값으로 신규/중복 판단 로직 구현
+9. 동시 요청 테스트 (FOR UPDATE 락 동작 확인)
+10. ON DUPLICATE KEY UPDATE 패턴 비교 구현
 
 ---
 

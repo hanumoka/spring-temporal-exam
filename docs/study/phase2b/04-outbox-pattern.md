@@ -761,6 +761,491 @@ public class ProcessedEvent {
 
 ---
 
+## 10. MyBatis로 Outbox 패턴 구현
+
+### 학습 목표
+
+JPA는 `@Query`와 JPQL로 쿼리를 추상화합니다. MyBatis로 직접 SQL을 작성하면:
+- `FOR UPDATE SKIP LOCKED`의 동작 원리 이해
+- Polling 쿼리 최적화 방법 학습
+- 배치 처리 쿼리 직접 작성
+
+### 10.1 MyBatis Mapper 인터페이스
+
+```java
+@Mapper
+public interface OutboxEventMapper {
+
+    // PENDING 이벤트 조회 (락 획득)
+    List<OutboxEvent> findPendingEventsForUpdate(@Param("limit") int limit);
+
+    // 이벤트 삽입
+    void insert(OutboxEvent event);
+
+    // 상태 업데이트 - PUBLISHED
+    int markAsPublished(@Param("id") Long id);
+
+    // 상태 업데이트 - FAILED
+    int markAsFailed(@Param("id") Long id,
+                     @Param("error") String error);
+
+    // 재시도 대상 조회
+    List<OutboxEvent> findFailedEventsForRetry(
+            @Param("maxRetryCount") int maxRetryCount,
+            @Param("limit") int limit);
+
+    // 재시도 상태로 변경
+    int markForRetry(@Param("id") Long id);
+
+    // 오래된 이벤트 삭제
+    int deletePublishedOlderThan(@Param("threshold") LocalDateTime threshold);
+
+    // 배치 삭제
+    int batchDeletePublished(@Param("ids") List<Long> ids);
+}
+```
+
+### 10.2 MyBatis XML Mapper
+
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.saga.mapper.OutboxEventMapper">
+
+    <resultMap id="OutboxEventResultMap" type="OutboxEvent">
+        <id property="id" column="id"/>
+        <result property="aggregateType" column="aggregate_type"/>
+        <result property="aggregateId" column="aggregate_id"/>
+        <result property="eventType" column="event_type"/>
+        <result property="payload" column="payload"/>
+        <result property="status" column="status"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="publishedAt" column="published_at"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="lastError" column="last_error"/>
+    </resultMap>
+
+    <!-- ===== PENDING 이벤트 Polling ===== -->
+    <!--
+        FOR UPDATE SKIP LOCKED 설명:
+        - FOR UPDATE: 해당 row에 배타적 락 획득
+        - SKIP LOCKED: 이미 락이 걸린 row는 건너뜀
+
+        효과:
+        - 다중 인스턴스에서 동시에 polling 해도 충돌 없음
+        - 같은 이벤트를 중복 처리하지 않음
+        - 락 대기 없이 즉시 처리 가능한 이벤트만 가져옴
+    -->
+    <select id="findPendingEventsForUpdate" resultMap="OutboxEventResultMap">
+        SELECT id, aggregate_type, aggregate_id, event_type,
+               payload, status, created_at, published_at,
+               retry_count, last_error
+        FROM outbox_event
+        WHERE status = 'PENDING'
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!-- ===== 이벤트 삽입 ===== -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO outbox_event (
+            aggregate_type,
+            aggregate_id,
+            event_type,
+            payload,
+            status,
+            created_at,
+            retry_count
+        ) VALUES (
+            #{aggregateType},
+            #{aggregateId},
+            #{eventType},
+            #{payload},
+            'PENDING',
+            NOW(),
+            0
+        )
+    </insert>
+
+    <!-- ===== 발행 완료 처리 ===== -->
+    <!--
+        UPDATE 후 affected rows 반환
+        - 1: 정상 업데이트
+        - 0: 이미 처리됨 (다른 인스턴스가 먼저 처리)
+    -->
+    <update id="markAsPublished">
+        UPDATE outbox_event
+        SET status = 'PUBLISHED',
+            published_at = NOW()
+        WHERE id = #{id}
+          AND status = 'PENDING'
+    </update>
+
+    <!-- ===== 발행 실패 처리 ===== -->
+    <update id="markAsFailed">
+        UPDATE outbox_event
+        SET status = 'FAILED',
+            retry_count = retry_count + 1,
+            last_error = #{error}
+        WHERE id = #{id}
+    </update>
+
+    <!-- ===== 재시도 대상 조회 ===== -->
+    <!--
+        지수 백오프 계산:
+        - TIMESTAMPADD로 재시도 간격 계산
+        - POW(2, retry_count)로 2^n 분 후 재시도
+        - retry_count=0: 1분, retry_count=1: 2분, retry_count=2: 4분...
+    -->
+    <select id="findFailedEventsForRetry" resultMap="OutboxEventResultMap">
+        SELECT id, aggregate_type, aggregate_id, event_type,
+               payload, status, created_at, published_at,
+               retry_count, last_error
+        FROM outbox_event
+        WHERE status = 'FAILED'
+          AND retry_count &lt; #{maxRetryCount}
+          AND TIMESTAMPADD(MINUTE, POW(2, retry_count), created_at) &lt; NOW()
+        ORDER BY retry_count ASC, created_at ASC
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!-- ===== 재시도 상태로 변경 ===== -->
+    <update id="markForRetry">
+        UPDATE outbox_event
+        SET status = 'PENDING'
+        WHERE id = #{id}
+          AND status = 'FAILED'
+    </update>
+
+    <!-- ===== 오래된 이벤트 정리 ===== -->
+    <!--
+        Batch 삭제 시 주의:
+        - LIMIT 없이 대량 삭제 시 락 타임아웃 발생 가능
+        - 청크 단위로 삭제 권장
+    -->
+    <delete id="deletePublishedOlderThan">
+        DELETE FROM outbox_event
+        WHERE status = 'PUBLISHED'
+          AND published_at &lt; #{threshold}
+        LIMIT 1000
+    </delete>
+
+    <!-- ===== 배치 삭제 ===== -->
+    <delete id="batchDeletePublished">
+        DELETE FROM outbox_event
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>
+```
+
+### 10.3 FOR UPDATE SKIP LOCKED 동작 원리
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              FOR UPDATE SKIP LOCKED 다중 인스턴스 시나리오            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   outbox_event 테이블:                                               │
+│   ┌────┬────────┬────────────────────────────────────────────────┐ │
+│   │ ID │ STATUS │ 락 상태                                         │ │
+│   ├────┼────────┼────────────────────────────────────────────────┤ │
+│   │ 1  │PENDING │ 🔒 Instance A가 락 보유                         │ │
+│   │ 2  │PENDING │ 🔒 Instance A가 락 보유                         │ │
+│   │ 3  │PENDING │ 🔒 Instance B가 락 보유                         │ │
+│   │ 4  │PENDING │ 락 없음 (다음 폴링에서 획득 가능)                │ │
+│   │ 5  │PENDING │ 락 없음                                         │ │
+│   └────┴────────┴────────────────────────────────────────────────┘ │
+│                                                                      │
+│   [Instance A 쿼리]                                                  │
+│   SELECT ... WHERE status='PENDING' LIMIT 2 FOR UPDATE SKIP LOCKED  │
+│   → ID 1, 2 반환 (락 획득)                                          │
+│                                                                      │
+│   [Instance B 쿼리] (동시 실행)                                      │
+│   SELECT ... WHERE status='PENDING' LIMIT 2 FOR UPDATE SKIP LOCKED  │
+│   → ID 1, 2는 SKIP (이미 락 있음)                                   │
+│   → ID 3, 4 반환 (새 락 획득)                                       │
+│                                                                      │
+│   결과: 중복 처리 없이 병렬로 이벤트 발행                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.4 MyBatis Service 구현
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class OutboxMyBatisService {
+
+    private final OutboxEventMapper outboxMapper;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 비즈니스 로직과 같은 트랜잭션에서 호출
+     */
+    @Transactional
+    public OutboxEvent save(String aggregateType, String aggregateId,
+                            String eventType, Object eventData) {
+        try {
+            String payload = objectMapper.writeValueAsString(eventData);
+
+            OutboxEvent event = OutboxEvent.builder()
+                    .aggregateType(aggregateType)
+                    .aggregateId(aggregateId)
+                    .eventType(eventType)
+                    .payload(payload)
+                    .build();
+
+            outboxMapper.insert(event);
+            return event;
+
+        } catch (JsonProcessingException e) {
+            throw new OutboxException("Failed to serialize event", e);
+        }
+    }
+
+    /**
+     * Polling으로 PENDING 이벤트 조회
+     * FOR UPDATE SKIP LOCKED로 다중 인스턴스 충돌 방지
+     */
+    @Transactional
+    public List<OutboxEvent> pollPendingEvents(int batchSize) {
+        return outboxMapper.findPendingEventsForUpdate(batchSize);
+    }
+
+    /**
+     * 발행 성공 처리
+     */
+    @Transactional
+    public boolean markAsPublished(Long eventId) {
+        int affected = outboxMapper.markAsPublished(eventId);
+        if (affected == 0) {
+            log.warn("Event already processed by another instance: {}", eventId);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 발행 실패 처리
+     */
+    @Transactional
+    public void markAsFailed(Long eventId, String error) {
+        outboxMapper.markAsFailed(eventId, error);
+    }
+
+    /**
+     * 실패 이벤트 재시도 처리
+     */
+    @Transactional
+    public void processFailedEventsForRetry(int maxRetryCount, int batchSize) {
+        List<OutboxEvent> failedEvents =
+                outboxMapper.findFailedEventsForRetry(maxRetryCount, batchSize);
+
+        for (OutboxEvent event : failedEvents) {
+            outboxMapper.markForRetry(event.getId());
+            log.info("Marked event for retry: {} (attempt {})",
+                    event.getId(), event.getRetryCount() + 1);
+        }
+    }
+
+    /**
+     * 오래된 이벤트 정리 (청크 단위)
+     */
+    @Transactional
+    public int cleanupOldEvents(LocalDateTime threshold) {
+        int totalDeleted = 0;
+        int deleted;
+
+        // 청크 단위로 삭제 (LIMIT 1000)
+        do {
+            deleted = outboxMapper.deletePublishedOlderThan(threshold);
+            totalDeleted += deleted;
+            log.debug("Deleted {} events in this batch", deleted);
+        } while (deleted > 0);
+
+        return totalDeleted;
+    }
+}
+```
+
+### 10.5 MyBatis Polling Publisher
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class OutboxMyBatisPublisher {
+
+    private final OutboxMyBatisService outboxService;
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    private static final int BATCH_SIZE = 100;
+
+    /**
+     * 폴링 기반 이벤트 발행
+     *
+     * 동작 방식:
+     * 1. FOR UPDATE SKIP LOCKED로 PENDING 이벤트 조회
+     * 2. 각 이벤트를 Kafka로 발행
+     * 3. 성공/실패에 따라 상태 업데이트
+     *
+     * 다중 인스턴스에서 안전:
+     * - SKIP LOCKED로 이미 락된 이벤트는 건너뜀
+     * - 동일 이벤트 중복 처리 방지
+     */
+    @Scheduled(fixedDelay = 1000)
+    @Transactional
+    public void publishPendingEvents() {
+        List<OutboxEvent> events = outboxService.pollPendingEvents(BATCH_SIZE);
+
+        if (events.isEmpty()) {
+            return;
+        }
+
+        log.debug("Polling {} pending events", events.size());
+
+        for (OutboxEvent event : events) {
+            try {
+                publishToKafka(event);
+
+                if (outboxService.markAsPublished(event.getId())) {
+                    log.debug("Published event: {} ({})",
+                            event.getId(), event.getEventType());
+                }
+
+            } catch (Exception e) {
+                log.error("Failed to publish event: {}", event.getId(), e);
+                outboxService.markAsFailed(event.getId(), e.getMessage());
+            }
+        }
+    }
+
+    private void publishToKafka(OutboxEvent event) throws Exception {
+        String topic = resolveTopic(event.getAggregateType());
+        String key = event.getAggregateId();
+
+        kafkaTemplate.send(topic, key, event.getPayload())
+                .get(5, TimeUnit.SECONDS);
+    }
+
+    private String resolveTopic(String aggregateType) {
+        return switch (aggregateType) {
+            case "Order" -> "order-events";
+            case "Payment" -> "payment-events";
+            case "Inventory" -> "inventory-events";
+            default -> "domain-events";
+        };
+    }
+}
+```
+
+### 10.6 JPA vs MyBatis 비교
+
+| 기능 | JPA | MyBatis |
+|------|-----|---------|
+| **Polling 쿼리** | `@Query` + JPQL<br>`@Lock(PESSIMISTIC_WRITE)` | `FOR UPDATE SKIP LOCKED` 직접 작성 |
+| **SKIP LOCKED** | Hibernate 5.2+ 필요<br>설정 복잡 | SQL에 명시적으로 작성 |
+| **배치 삭제** | `@Modifying` + `@Query` | LIMIT 포함 DELETE 직접 작성 |
+| **지수 백오프** | Java 코드에서 계산 | SQL 함수(POW, TIMESTAMPADD)로 계산 |
+| **청크 처리** | Pageable 사용 | LIMIT 직접 제어 |
+| **학습 효과** | 추상화된 동작 | SQL 레벨 동작 이해 |
+
+### 10.7 고급 Polling 최적화
+
+```xml
+<!-- 파티션 기반 Polling (대용량 처리) -->
+<!--
+    인스턴스마다 다른 파티션을 처리하여 부하 분산
+    partition_key = aggregate_id % partition_count
+-->
+<select id="findPendingEventsByPartition" resultMap="OutboxEventResultMap">
+    SELECT id, aggregate_type, aggregate_id, event_type,
+           payload, status, created_at, published_at,
+           retry_count, last_error
+    FROM outbox_event
+    WHERE status = 'PENDING'
+      AND MOD(CONV(SUBSTRING(MD5(aggregate_id), 1, 8), 16, 10), #{partitionCount})
+          = #{partitionId}
+    ORDER BY created_at ASC
+    LIMIT #{limit}
+    FOR UPDATE SKIP LOCKED
+</select>
+
+<!-- 우선순위 기반 Polling -->
+<select id="findPendingEventsByPriority" resultMap="OutboxEventResultMap">
+    SELECT id, aggregate_type, aggregate_id, event_type,
+           payload, status, created_at, published_at,
+           retry_count, last_error
+    FROM outbox_event
+    WHERE status = 'PENDING'
+    ORDER BY
+        CASE aggregate_type
+            WHEN 'Payment' THEN 1    -- 결제 우선
+            WHEN 'Order' THEN 2      -- 주문 다음
+            ELSE 3                    -- 나머지
+        END,
+        created_at ASC
+    LIMIT #{limit}
+    FOR UPDATE SKIP LOCKED
+</select>
+```
+
+### 10.8 실습 과제 (MyBatis)
+
+#### 과제 1: 기본 Outbox MyBatis 구현
+```
+[ ] OutboxEventMapper 인터페이스 작성
+[ ] outbox-mapper.xml 작성
+[ ] FOR UPDATE SKIP LOCKED 테스트
+```
+
+#### 과제 2: 다중 인스턴스 테스트
+```
+[ ] 2개 인스턴스 동시 실행
+[ ] SKIP LOCKED로 중복 처리 방지 확인
+[ ] 처리량 비교 (단일 vs 다중)
+```
+
+#### 과제 3: 배치 성능 최적화
+```
+[ ] 대량 이벤트 삽입 (1만 건)
+[ ] 청크 단위 삭제 성능 측정
+[ ] 인덱스 효과 비교
+```
+
+### 10.9 핵심 SQL 패턴 정리
+
+```sql
+-- 1. 안전한 Polling (중복 방지)
+SELECT ... FOR UPDATE SKIP LOCKED;
+
+-- 2. 조건부 상태 업데이트 (동시성 안전)
+UPDATE outbox_event
+SET status = 'PUBLISHED'
+WHERE id = ? AND status = 'PENDING';
+
+-- 3. 지수 백오프 재시도
+WHERE TIMESTAMPADD(MINUTE, POW(2, retry_count), created_at) < NOW();
+
+-- 4. 청크 단위 삭제
+DELETE ... LIMIT 1000;
+
+-- 5. 파티션 기반 분산 처리
+WHERE MOD(CONV(SUBSTRING(MD5(aggregate_id), 1, 8), 16, 10), ?) = ?;
+```
+
+---
+
 ## 다음 단계
 
 [05-opentelemetry-zipkin.md](./05-opentelemetry-zipkin.md) - 분산 추적으로 이동

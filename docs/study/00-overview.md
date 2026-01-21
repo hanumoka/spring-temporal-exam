@@ -259,7 +259,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 | **언어** | Java 21 | 프로그래밍 언어 |
 | **빌드** | Gradle | 빌드 도구 (멀티모듈) |
 | **DB** | MySQL | 관계형 데이터베이스 |
-| **ORM** | JPA (Hibernate) | 객체-관계 매핑 |
+| **ORM** | JPA + MyBatis | 객체-관계 매핑 (원리 학습용 병행) |
 | **DB 마이그레이션** | Flyway | 스키마 버전 관리 |
 | **캐시/락** | Redis + Redisson | 캐싱, 분산 락 |
 | **MQ** | Redis Stream | 메시지 큐 |

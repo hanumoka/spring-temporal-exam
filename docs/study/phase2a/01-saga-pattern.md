@@ -653,6 +653,569 @@ public class SagaState {
 
 ---
 
+## 9. MyBatis로 Saga 상태 관리
+
+### 학습 목표
+
+JPA는 Entity 상태 변경을 자동으로 추적합니다. MyBatis로 직접 SQL을 작성하면:
+- Saga 상태 전이 쿼리의 원리 이해
+- 조건부 UPDATE로 동시성 제어 학습
+- 복구를 위한 조회 쿼리 작성
+
+### 9.1 Saga 상태 테이블 설계
+
+```sql
+CREATE TABLE saga_state (
+    saga_id         VARCHAR(36) PRIMARY KEY,
+    saga_type       VARCHAR(100) NOT NULL,        -- ORDER_SAGA, PAYMENT_SAGA 등
+    status          VARCHAR(50) NOT NULL,         -- STARTED, COMPENSATING, COMPLETED, FAILED
+    current_step    INT NOT NULL DEFAULT 0,       -- 현재 진행 단계
+
+    -- 각 단계별 결과 저장
+    order_id        VARCHAR(36),
+    reservation_id  VARCHAR(36),
+    payment_id      VARCHAR(36),
+
+    -- 메타 정보
+    request_payload JSON,                          -- 원본 요청 데이터
+    failure_reason  TEXT,
+    version         INT NOT NULL DEFAULT 0,        -- 낙관적 락
+
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    INDEX idx_status (status),
+    INDEX idx_created (created_at)
+);
+```
+
+### 9.2 MyBatis Mapper 인터페이스
+
+```java
+@Mapper
+public interface SagaStateMapper {
+
+    // Saga 생성
+    void insert(SagaState sagaState);
+
+    // 상태 업데이트 (낙관적 락)
+    int updateStatus(@Param("sagaId") String sagaId,
+                     @Param("newStatus") String newStatus,
+                     @Param("expectedVersion") int expectedVersion);
+
+    // 단계별 결과 저장
+    int updateStepResult(@Param("sagaId") String sagaId,
+                         @Param("step") int step,
+                         @Param("resultColumn") String resultColumn,
+                         @Param("resultValue") String resultValue,
+                         @Param("expectedVersion") int expectedVersion);
+
+    // 실패 정보 기록
+    int markAsFailed(@Param("sagaId") String sagaId,
+                     @Param("failureReason") String failureReason,
+                     @Param("expectedVersion") int expectedVersion);
+
+    // 복구 대상 조회 (STARTED 상태로 오래 남은 것)
+    List<SagaState> findStuckSagas(@Param("status") String status,
+                                    @Param("olderThan") LocalDateTime olderThan,
+                                    @Param("limit") int limit);
+
+    // ID로 조회
+    SagaState findById(@Param("sagaId") String sagaId);
+
+    // 상태별 통계
+    List<SagaStatistics> getStatistics();
+}
+```
+
+### 9.3 MyBatis XML Mapper
+
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.saga.mapper.SagaStateMapper">
+
+    <resultMap id="SagaStateResultMap" type="SagaState">
+        <id property="sagaId" column="saga_id"/>
+        <result property="sagaType" column="saga_type"/>
+        <result property="status" column="status"/>
+        <result property="currentStep" column="current_step"/>
+        <result property="orderId" column="order_id"/>
+        <result property="reservationId" column="reservation_id"/>
+        <result property="paymentId" column="payment_id"/>
+        <result property="requestPayload" column="request_payload"/>
+        <result property="failureReason" column="failure_reason"/>
+        <result property="version" column="version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <!-- ===== Saga 생성 ===== -->
+    <insert id="insert">
+        INSERT INTO saga_state (
+            saga_id,
+            saga_type,
+            status,
+            current_step,
+            request_payload,
+            version,
+            created_at
+        ) VALUES (
+            #{sagaId},
+            #{sagaType},
+            'STARTED',
+            0,
+            #{requestPayload},
+            0,
+            NOW()
+        )
+    </insert>
+
+    <!-- ===== 상태 업데이트 (낙관적 락) ===== -->
+    <!--
+        핵심 패턴: WHERE version = ?
+        - 동시에 여러 요청이 상태를 변경하려 할 때
+        - 먼저 변경한 요청만 성공 (affected rows = 1)
+        - 나중 요청은 실패 (affected rows = 0)
+    -->
+    <update id="updateStatus">
+        UPDATE saga_state
+        SET status = #{newStatus},
+            version = version + 1,
+            updated_at = NOW()
+        WHERE saga_id = #{sagaId}
+          AND version = #{expectedVersion}
+    </update>
+
+    <!-- ===== 단계별 결과 저장 ===== -->
+    <!--
+        동적 컬럼 업데이트:
+        - 각 단계(step)에서 결과값을 저장
+        - 보상 트랜잭션 시 이 값들을 사용
+    -->
+    <update id="updateStepResult">
+        UPDATE saga_state
+        SET current_step = #{step},
+            <!-- 동적 컬럼 설정 -->
+            <choose>
+                <when test="resultColumn == 'order_id'">
+                    order_id = #{resultValue},
+                </when>
+                <when test="resultColumn == 'reservation_id'">
+                    reservation_id = #{resultValue},
+                </when>
+                <when test="resultColumn == 'payment_id'">
+                    payment_id = #{resultValue},
+                </when>
+            </choose>
+            version = version + 1,
+            updated_at = NOW()
+        WHERE saga_id = #{sagaId}
+          AND version = #{expectedVersion}
+    </update>
+
+    <!-- ===== 실패 처리 ===== -->
+    <update id="markAsFailed">
+        UPDATE saga_state
+        SET status = 'FAILED',
+            failure_reason = #{failureReason},
+            version = version + 1,
+            updated_at = NOW()
+        WHERE saga_id = #{sagaId}
+          AND version = #{expectedVersion}
+    </update>
+
+    <!-- ===== 보상 시작 ===== -->
+    <update id="startCompensation">
+        UPDATE saga_state
+        SET status = 'COMPENSATING',
+            version = version + 1,
+            updated_at = NOW()
+        WHERE saga_id = #{sagaId}
+          AND status = 'STARTED'
+          AND version = #{expectedVersion}
+    </update>
+
+    <!-- ===== 복구 대상 조회 ===== -->
+    <!--
+        장애 복구 시나리오:
+        - STARTED 상태로 10분 이상 남은 Saga
+        - 서버 재시작 시 이 쿼리로 복구 대상 찾음
+    -->
+    <select id="findStuckSagas" resultMap="SagaStateResultMap">
+        SELECT saga_id, saga_type, status, current_step,
+               order_id, reservation_id, payment_id,
+               request_payload, failure_reason, version,
+               created_at, updated_at
+        FROM saga_state
+        WHERE status = #{status}
+          AND updated_at &lt; #{olderThan}
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!-- ===== ID로 조회 ===== -->
+    <select id="findById" resultMap="SagaStateResultMap">
+        SELECT saga_id, saga_type, status, current_step,
+               order_id, reservation_id, payment_id,
+               request_payload, failure_reason, version,
+               created_at, updated_at
+        FROM saga_state
+        WHERE saga_id = #{sagaId}
+    </select>
+
+    <!-- ===== 상태별 통계 ===== -->
+    <select id="getStatistics" resultType="map">
+        SELECT status,
+               COUNT(*) as count,
+               MIN(created_at) as oldest,
+               MAX(created_at) as newest
+        FROM saga_state
+        GROUP BY status
+    </select>
+
+</mapper>
+```
+
+### 9.4 MyBatis 기반 Saga 오케스트레이터
+
+```java
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class MyBatisSagaOrchestrator implements OrderSagaOrchestrator {
+
+    private final SagaStateMapper sagaStateMapper;
+    private final OrderServiceClient orderClient;
+    private final InventoryServiceClient inventoryClient;
+    private final PaymentServiceClient paymentClient;
+    private final ObjectMapper objectMapper;
+
+    @Override
+    @Transactional
+    public OrderSagaResult execute(OrderSagaRequest request) {
+        String sagaId = UUID.randomUUID().toString();
+        log.info("Saga 시작: sagaId={}", sagaId);
+
+        // 1. Saga 상태 생성
+        SagaState saga = createSaga(sagaId, request);
+
+        try {
+            // 2. Step 1: 주문 생성
+            String orderId = executeStep1(saga, request);
+
+            // 3. Step 2: 재고 예약
+            String reservationId = executeStep2(saga, orderId, request);
+
+            // 4. Step 3: 결제 처리
+            String paymentId = executeStep3(saga, orderId, request);
+
+            // 5. Step 4: 주문 확정
+            executeStep4(saga, orderId);
+
+            // 6. 완료 처리
+            completeWithOptimisticLock(saga);
+
+            return OrderSagaResult.success(orderId, paymentId);
+
+        } catch (Exception e) {
+            log.error("Saga 실패: sagaId={}, error={}", sagaId, e.getMessage());
+            compensate(saga);
+            return OrderSagaResult.failure(e.getMessage());
+        }
+    }
+
+    private SagaState createSaga(String sagaId, OrderSagaRequest request) {
+        try {
+            SagaState saga = SagaState.builder()
+                    .sagaId(sagaId)
+                    .sagaType("ORDER_SAGA")
+                    .requestPayload(objectMapper.writeValueAsString(request))
+                    .build();
+            sagaStateMapper.insert(saga);
+            return saga;
+        } catch (JsonProcessingException e) {
+            throw new SagaException("Failed to serialize request", e);
+        }
+    }
+
+    /**
+     * 낙관적 락을 사용한 단계 결과 저장
+     * 동시 요청 시 먼저 처리한 요청만 성공
+     */
+    private void saveStepResult(SagaState saga, int step,
+                                 String column, String value) {
+        int affected = sagaStateMapper.updateStepResult(
+                saga.getSagaId(),
+                step,
+                column,
+                value,
+                saga.getVersion()
+        );
+
+        if (affected == 0) {
+            throw new OptimisticLockException(
+                    "Saga state was modified by another process");
+        }
+
+        // 버전 증가 반영
+        saga.incrementVersion();
+    }
+
+    private String executeStep1(SagaState saga, OrderSagaRequest request) {
+        log.info("Step 1: 주문 생성");
+        OrderResponse order = orderClient.createOrder(request.toOrderRequest());
+        saveStepResult(saga, 1, "order_id", order.orderId());
+        saga.setOrderId(order.orderId());
+        return order.orderId();
+    }
+
+    private String executeStep2(SagaState saga, String orderId,
+                                 OrderSagaRequest request) {
+        log.info("Step 2: 재고 예약");
+        ReservationResponse reservation = inventoryClient.reserveStock(
+                new ReservationRequest(orderId, request.productId(), request.quantity())
+        );
+        saveStepResult(saga, 2, "reservation_id", reservation.reservationId());
+        saga.setReservationId(reservation.reservationId());
+        return reservation.reservationId();
+    }
+
+    private String executeStep3(SagaState saga, String orderId,
+                                 OrderSagaRequest request) {
+        log.info("Step 3: 결제 처리");
+        PaymentResponse payment = paymentClient.processPayment(
+                new PaymentRequest(orderId, request.amount(), request.customerId())
+        );
+        saveStepResult(saga, 3, "payment_id", payment.paymentId());
+        saga.setPaymentId(payment.paymentId());
+        return payment.paymentId();
+    }
+
+    private void executeStep4(SagaState saga, String orderId) {
+        log.info("Step 4: 주문 확정");
+        orderClient.confirmOrder(orderId);
+        saveStepResult(saga, 4, "order_id", orderId); // 완료 단계 기록
+    }
+
+    private void completeWithOptimisticLock(SagaState saga) {
+        int affected = sagaStateMapper.updateStatus(
+                saga.getSagaId(),
+                "COMPLETED",
+                saga.getVersion()
+        );
+
+        if (affected == 0) {
+            log.warn("Failed to mark saga as completed (concurrent update)");
+        }
+    }
+
+    /**
+     * 보상 트랜잭션 실행
+     * 저장된 단계별 결과를 사용하여 역순으로 롤백
+     */
+    private void compensate(SagaState saga) {
+        log.info("보상 트랜잭션 시작: sagaId={}", saga.getSagaId());
+
+        // 보상 시작 상태로 변경
+        sagaStateMapper.updateStatus(
+                saga.getSagaId(),
+                "COMPENSATING",
+                saga.getVersion()
+        );
+        saga.incrementVersion();
+
+        // 역순 보상 (저장된 ID 사용)
+        if (saga.getPaymentId() != null) {
+            try {
+                log.info("보상: 결제 환불 - {}", saga.getPaymentId());
+                paymentClient.refundPayment(saga.getPaymentId());
+            } catch (Exception e) {
+                log.error("결제 환불 실패: {}", e.getMessage());
+            }
+        }
+
+        if (saga.getReservationId() != null) {
+            try {
+                log.info("보상: 재고 복구 - {}", saga.getReservationId());
+                inventoryClient.cancelReservation(saga.getReservationId());
+            } catch (Exception e) {
+                log.error("재고 복구 실패: {}", e.getMessage());
+            }
+        }
+
+        if (saga.getOrderId() != null) {
+            try {
+                log.info("보상: 주문 취소 - {}", saga.getOrderId());
+                orderClient.cancelOrder(saga.getOrderId());
+            } catch (Exception e) {
+                log.error("주문 취소 실패: {}", e.getMessage());
+            }
+        }
+
+        // 최종 상태 업데이트
+        sagaStateMapper.markAsFailed(
+                saga.getSagaId(),
+                "Saga compensation completed",
+                saga.getVersion()
+        );
+    }
+}
+```
+
+### 9.5 Saga 복구 스케줄러
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class SagaRecoveryScheduler {
+
+    private final SagaStateMapper sagaStateMapper;
+    private final MyBatisSagaOrchestrator orchestrator;
+
+    private static final int STUCK_THRESHOLD_MINUTES = 10;
+    private static final int BATCH_SIZE = 50;
+
+    /**
+     * 멈춰있는 Saga 복구
+     * - STARTED 상태로 10분 이상 남은 Saga
+     * - 서버 장애 후 재시작 시 복구 처리
+     */
+    @Scheduled(fixedRate = 60000)  // 1분마다
+    @Transactional
+    public void recoverStuckSagas() {
+        LocalDateTime threshold = LocalDateTime.now()
+                .minusMinutes(STUCK_THRESHOLD_MINUTES);
+
+        List<SagaState> stuckSagas = sagaStateMapper.findStuckSagas(
+                "STARTED",
+                threshold,
+                BATCH_SIZE
+        );
+
+        for (SagaState saga : stuckSagas) {
+            try {
+                log.info("복구 시도: sagaId={}, step={}",
+                        saga.getSagaId(), saga.getCurrentStep());
+
+                // 현재 단계부터 재시도 또는 보상 처리
+                handleStuckSaga(saga);
+
+            } catch (Exception e) {
+                log.error("복구 실패: sagaId={}", saga.getSagaId(), e);
+            }
+        }
+    }
+
+    private void handleStuckSaga(SagaState saga) {
+        // 단계에 따른 복구 전략
+        switch (saga.getCurrentStep()) {
+            case 0, 1 -> {
+                // 초기 단계 - 그냥 취소
+                sagaStateMapper.markAsFailed(saga.getSagaId(),
+                        "Stuck at initial step", saga.getVersion());
+            }
+            case 2, 3 -> {
+                // 중간 단계 - 보상 트랜잭션 실행
+                orchestrator.compensate(saga);
+            }
+            case 4 -> {
+                // 최종 단계 - 완료로 처리
+                sagaStateMapper.updateStatus(saga.getSagaId(),
+                        "COMPLETED", saga.getVersion());
+            }
+        }
+    }
+
+    /**
+     * COMPENSATING 상태로 멈춘 Saga 정리
+     */
+    @Scheduled(fixedRate = 300000)  // 5분마다
+    @Transactional
+    public void cleanupCompensatingSagas() {
+        LocalDateTime threshold = LocalDateTime.now().minusMinutes(30);
+
+        List<SagaState> compensatingSagas = sagaStateMapper.findStuckSagas(
+                "COMPENSATING",
+                threshold,
+                BATCH_SIZE
+        );
+
+        for (SagaState saga : compensatingSagas) {
+            log.warn("보상 처리 중 멈춘 Saga 발견: {}", saga.getSagaId());
+            sagaStateMapper.markAsFailed(saga.getSagaId(),
+                    "Compensation timed out", saga.getVersion());
+        }
+    }
+}
+```
+
+### 9.6 JPA vs MyBatis 비교
+
+| 기능 | JPA | MyBatis |
+|------|-----|---------|
+| **상태 변경** | `entity.setStatus()` 자동 감지 | `UPDATE ... SET status = ?` 직접 작성 |
+| **낙관적 락** | `@Version` 자동 처리 | `WHERE version = ?` 직접 작성 |
+| **단계별 저장** | Entity 필드 설정 | 동적 컬럼 UPDATE |
+| **복구 조회** | JPQL + `@Lock` | `FOR UPDATE SKIP LOCKED` 직접 |
+| **학습 효과** | 추상화된 동작 | SQL 레벨 동시성 제어 이해 |
+
+### 9.7 핵심 SQL 패턴 정리
+
+```sql
+-- 1. 낙관적 락으로 상태 변경
+UPDATE saga_state
+SET status = ?, version = version + 1
+WHERE saga_id = ? AND version = ?;
+
+-- 2. 복구 대상 조회 (동시 처리 방지)
+SELECT * FROM saga_state
+WHERE status = 'STARTED'
+  AND updated_at < NOW() - INTERVAL 10 MINUTE
+FOR UPDATE SKIP LOCKED;
+
+-- 3. 단계별 결과 저장 (동적 컬럼)
+UPDATE saga_state
+SET current_step = ?,
+    order_id = ?,
+    version = version + 1
+WHERE saga_id = ? AND version = ?;
+
+-- 4. 상태별 통계
+SELECT status, COUNT(*), MIN(created_at), MAX(created_at)
+FROM saga_state
+GROUP BY status;
+```
+
+### 9.8 실습 과제 (MyBatis)
+
+#### 과제 1: 기본 Saga 상태 관리
+```
+[ ] saga_state 테이블 생성
+[ ] SagaStateMapper 인터페이스 작성
+[ ] saga-mapper.xml 작성
+```
+
+#### 과제 2: 낙관적 락 테스트
+```
+[ ] 동시에 2개 요청으로 같은 Saga 상태 변경 시도
+[ ] 한 쪽만 성공하는지 확인
+[ ] 실패한 쪽의 affected rows = 0 확인
+```
+
+#### 과제 3: 복구 시나리오 테스트
+```
+[ ] Saga를 중간 단계에서 강제 중단
+[ ] 복구 스케줄러가 해당 Saga 찾는지 확인
+[ ] 보상 트랜잭션 정상 실행 확인
+```
+
+---
+
 ## 참고 자료
 
 - [Microservices.io - Saga Pattern](https://microservices.io/patterns/data/saga.html)
