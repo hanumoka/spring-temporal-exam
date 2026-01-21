@@ -481,4 +481,4 @@ public class OrderServiceClient {
 
 ## 다음 단계
 
-Phase 2-A 학습 완료! [Phase 2-B: Redis 기초](../phase2b/01-redis-basics.md)로 이동
+[09-transaction-template.md](./09-transaction-template.md) - TransactionTemplate으로 이동

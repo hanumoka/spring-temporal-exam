@@ -15,6 +15,7 @@
 | D009 | Service Mesh | 미사용 (학습 범위 외) |
 | D010 | 동시성 제어 | 서비스별 차별화 적용 |
 | D011 | ORM 전략 | JPA + MyBatis 병행 학습 |
+| D012 | 트랜잭션 관리 | TransactionTemplate (프로그래밍 방식) |
 
 ---
 
@@ -378,6 +379,88 @@ semaphore.trySetPermits(5);  // 최대 5개 동시 발송
 | [05-idempotency.md](../study/phase2a/05-idempotency.md) | 멱등성 보장 | `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE` |
 | **Phase 2-B** | | |
 | [04-outbox-pattern.md](../study/phase2b/04-outbox-pattern.md) | Outbox 폴링 | `FOR UPDATE SKIP LOCKED`, 배치 삭제 |
+
+---
+
+## D012. 트랜잭션 관리 전략
+
+**결정**: TransactionTemplate (프로그래밍 방식)
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                @Transactional vs TransactionTemplate                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [@Transactional - 선언적 방식]                                      │
+│  ├── 장점: 간편함, 코드 간결                                         │
+│  └── 단점: 경계 암묵적, 모니터링 어려움, self-invocation 문제        │
+│                                                                      │
+│  [TransactionTemplate - 프로그래밍 방식]                             │
+│  ├── 장점: 경계 명시적, 모니터링 용이, 세밀한 제어                   │
+│  └── 단점: 코드량 증가                                               │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 선택 이유
+
+```
+1. 모니터링 필수
+   └── 트랜잭션 시작/종료 시점에 메트릭/로깅 삽입 필요
+   └── @Transactional은 AOP 기반이라 삽입 어려움
+
+2. 트랜잭션 경계 명확화
+   └── 코드에서 트랜잭션 시작/종료가 명시적으로 보임
+   └── 디버깅 및 코드 리뷰 용이
+
+3. 학습 목적
+   └── 트랜잭션 동작 원리를 명확히 이해
+   └── 스프링의 마법(Magic)에 의존하지 않음
+```
+
+### 모니터링 대상
+
+| 항목 | 메트릭 | 설명 |
+|------|--------|------|
+| 성공/실패 | `transaction.success`, `transaction.failure` | 트랜잭션 결과 카운트 |
+| 소요 시간 | `transaction.duration` | 트랜잭션 처리 시간 |
+| 활성 수 | `transaction.active` | 현재 진행 중인 트랜잭션 |
+| 롤백 | `transaction.rollback` | 롤백 발생 카운트 |
+
+### 구현 패턴
+
+```java
+public Order createOrder(OrderRequest request) {
+    String txId = generateTxId();
+    Instant start = Instant.now();
+    MDC.put("txId", txId);
+
+    try {
+        Order result = transactionTemplate.execute(status -> {
+            // 비즈니스 로직
+            return orderRepository.save(Order.create(request));
+        });
+
+        meterRegistry.counter("transaction.success", "type", "order").increment();
+        return result;
+
+    } catch (Exception e) {
+        meterRegistry.counter("transaction.failure", "type", "order").increment();
+        throw e;
+
+    } finally {
+        meterRegistry.timer("transaction.duration", "type", "order")
+            .record(Duration.between(start, Instant.now()));
+        MDC.remove("txId");
+    }
+}
+```
+
+### 관련 문서
+
+- [09-transaction-template.md](../study/phase2a/09-transaction-template.md) - TransactionTemplate 학습
 
 ---
 

@@ -144,6 +144,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 | Bean Validation | 입력 값 검증 | 잘못된 요청 사전 차단 |
 | 예외 처리 | 일관된 에러 응답 | API 품질 향상 |
 | MDC 로깅 | 요청 추적을 위한 로깅 | 디버깅 용이성 |
+| TransactionTemplate | 프로그래밍 방식 트랜잭션 관리 | 트랜잭션 모니터링, 명시적 경계 |
 
 ---
 
@@ -304,6 +305,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 - [06-bean-validation.md](./phase2a/06-bean-validation.md) - 입력 검증
 - [07-exception-handling.md](./phase2a/07-exception-handling.md) - 예외 처리
 - [08-mdc-logging.md](./phase2a/08-mdc-logging.md) - MDC 로깅
+- [09-transaction-template.md](./phase2a/09-transaction-template.md) - TransactionTemplate
 
 ### Phase 2-B: MQ + Observability
 - [01-redis-basics.md](./phase2b/01-redis-basics.md) - Redis 기초
