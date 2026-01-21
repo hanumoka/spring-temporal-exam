@@ -16,6 +16,8 @@
 | 데이터 모델 설계 | 대기 |
 | 각 서비스 모듈 스켈레톤 생성 | 대기 |
 | Docker Compose 인프라 구성 | 대기 |
+| Flyway DB 마이그레이션 설정 | 대기 |
+| Spring Profiles 환경별 설정 | 대기 |
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
@@ -32,6 +34,7 @@
 | 재고 차감 분산 락 (Redisson) | 대기 |
 | 낙관적 락 (JPA @Version) | 대기 |
 | 멱등성 처리 (Idempotency Key) | 대기 |
+| Bean Validation 입력 검증 | 대기 |
 
 ## Phase 2-B: MQ + Redis + Observability
 
@@ -42,6 +45,12 @@
 | Redisson 학습 | 대기 |
 | Notification 서비스 구현 | 대기 |
 | OpenTelemetry/Zipkin 연동 | 대기 |
+| Spring Boot Actuator 설정 | 대기 |
+| Micrometer + Prometheus 연동 | 대기 |
+| Grafana 대시보드 구성 | 대기 |
+| Loki 로그 수집 연동 | 대기 |
+| Alertmanager 장애 알림 설정 | 대기 |
+| Outbox 패턴 (이벤트 발행 신뢰성) | 대기 |
 
 ## Phase 3: Temporal 연동
 

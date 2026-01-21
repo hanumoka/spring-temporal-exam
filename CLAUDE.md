@@ -30,11 +30,13 @@ orchestrator-temporal/  # Temporal 구현
 
 ## 기술 스택
 - Spring Boot 4.0.1 / Java 21
-- MySQL + JPA (공유 DB + 스키마 분리)
+- MySQL + JPA + Flyway (DB 마이그레이션)
 - Redis + Redisson (캐싱, 분산 락)
 - Redis Stream (MQ)
 - Temporal (Phase 3)
 - Resilience4j (재시도, 서킷 브레이커)
+- Bean Validation (입력 검증)
+- Prometheus + Grafana + Loki + Alertmanager (모니터링/로그/알람)
 - Testcontainers
 
 ## 핵심 결정

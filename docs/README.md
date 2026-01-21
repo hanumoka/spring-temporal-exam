@@ -6,14 +6,20 @@ MSA 환경에서 EDA 적용 시 발생하는 어려움을 해결하기 위한 �
 
 | 분야 | 기술 |
 |------|------|
-| EDA | Saga 패턴 (Orchestration) |
+| EDA | Saga 패턴 (Orchestration), Outbox 패턴 |
 | Temporal | Workflow Engine |
 | Redis | 기본 자료구조, 캐싱 |
 | Redis Stream | 메시지 큐, Consumer Group |
 | Redisson | 분산 락, Spring 연동 |
 | 동시성 제어 | 분산 락, 낙관적 락, 멱등성 |
 | 장애 대응 | Resilience4j |
+| 입력 검증 | Bean Validation |
+| DB 관리 | Flyway 마이그레이션 |
+| 설정 관리 | Spring Profiles |
 | Observability | MDC, OpenTelemetry/Zipkin |
+| 모니터링 | Actuator, Micrometer, Prometheus, Grafana |
+| 로그 수집 | Loki |
+| 알람 | Alertmanager |
 
 ## 비즈니스 시나리오
 
