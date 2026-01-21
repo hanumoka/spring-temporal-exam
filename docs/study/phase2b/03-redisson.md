@@ -675,7 +675,473 @@ public class DeadlockPreventionService {
 
 ---
 
-## 8. 테스트
+## 8. Phantom Key와 락 타임아웃 이슈
+
+### 8.1 Phantom Key란?
+
+**Phantom Key**는 존재한다고 "착각"하지만 실제로는 없는(또는 사라진) 키를 의미합니다.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Phantom Key 발생 시나리오                          │
+│                                                                       │
+│   [시나리오 1: 분산 락 TTL 만료]                                       │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                                                              │   │
+│   │  T0: Server A가 락 획득                                       │   │
+│   │      SET lock:order:123 "server-a-uuid" EX 5                 │   │
+│   │      → 락 유지 시간: 5초                                      │   │
+│   │                                                              │   │
+│   │  T1~T4: Server A가 오래 걸리는 작업 처리 중...                │   │
+│   │         (GC pause, 네트워크 지연, 복잡한 연산 등)             │   │
+│   │                                                              │   │
+│   │  T5: TTL 만료! 락 키 자동 삭제 ← Phantom 발생 시점           │   │
+│   │      Server A는 락을 가지고 있다고 "착각"                     │   │
+│   │                                                              │   │
+│   │  T6: Server B가 락 획득 성공!                                 │   │
+│   │      SET lock:order:123 "server-b-uuid" EX 5                 │   │
+│   │                                                              │   │
+│   │  T7: Server A 작업 완료, Server B도 작업 중                   │   │
+│   │      → 두 서버가 동시에 같은 리소스 접근! 💥                  │   │
+│   │                                                              │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   [시나리오 2: Check-then-Act Race Condition]                         │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                                                              │   │
+│   │  Server A                      Redis                Server B │   │
+│   │     │                            │                      │    │   │
+│   │     │ ─── EXISTS key ──────────▶│                      │    │   │
+│   │     │◀─── true ─────────────────│                      │    │   │
+│   │     │                            │◀── DEL key ─────────│    │   │
+│   │     │                            │─── OK ─────────────▶│    │   │
+│   │     │ ─── GET key ─────────────▶│                      │    │   │
+│   │     │◀─── null ─────────────────│  ← Phantom!          │    │   │
+│   │     │                            │                      │    │   │
+│   │  "키가 있다고 확인했는데 없음!"                               │   │
+│   │                                                              │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   [시나리오 3: 락 해제 시 다른 서버의 락 삭제]                         │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                                                              │   │
+│   │  T0: Server A 락 획득 (value: "uuid-a")                      │   │
+│   │  T5: TTL 만료, 락 삭제                                        │   │
+│   │  T6: Server B 락 획득 (value: "uuid-b")                      │   │
+│   │  T7: Server A 작업 완료, unlock 호출                          │   │
+│   │      DEL lock:order:123                                      │   │
+│   │      → Server B의 락이 삭제됨! 💥                            │   │
+│   │                                                              │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 락 타임아웃 문제 상세
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    락 타임아웃 딜레마                                  │
+│                                                                       │
+│   TTL을 너무 짧게 설정하면:                                           │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  • 처리 중 락 만료 → 동시 접근 발생                           │   │
+│   │  • Phantom Key 위험 증가                                     │   │
+│   │  • 데이터 정합성 깨짐                                         │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   TTL을 너무 길게 설정하면:                                           │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  • 서버 장애 시 락이 오래 유지됨                              │   │
+│   │  • 다른 서버들이 오래 대기해야 함                              │   │
+│   │  • 시스템 처리량 저하                                         │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   적정 TTL = 예상 처리 시간 + 여유 시간 (GC, 네트워크 지연 고려)      │
+│                                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.3 대응 전략 1: Redisson Watch Dog (락 자동 연장)
+
+Redisson은 **Watch Dog** 메커니즘으로 락 자동 연장을 지원합니다.
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class WatchDogLockService {
+
+    private final RedissonClient redissonClient;
+
+    /**
+     * Watch Dog 활성화된 락 사용
+     *
+     * leaseTime을 지정하지 않으면 Watch Dog이 자동 활성화됨
+     * - 기본 lockWatchdogTimeout: 30초
+     * - 10초마다 락 연장 (lockWatchdogTimeout / 3)
+     * - 스레드가 살아있는 한 계속 연장
+     */
+    public void executeWithWatchDog(String resourceId, Runnable task) {
+        String lockKey = "lock:resource:" + resourceId;
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            // leaseTime 미지정 → Watch Dog 활성화
+            lock.lock();  // 또는 lock.tryLock(waitTime, TimeUnit.SECONDS)
+
+            log.info("Lock acquired with Watch Dog: {}", lockKey);
+            task.run();
+
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+                log.info("Lock released: {}", lockKey);
+            }
+        }
+    }
+
+    /**
+     * Watch Dog 비활성화 (leaseTime 지정)
+     *
+     * leaseTime을 지정하면 Watch Dog이 비활성화됨
+     * - 지정된 시간 후 자동 만료
+     * - 장애 시 빠른 복구가 필요한 경우 사용
+     */
+    public void executeWithFixedLease(String resourceId, Runnable task) {
+        String lockKey = "lock:resource:" + resourceId;
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            // leaseTime 지정 → Watch Dog 비활성화
+            boolean acquired = lock.tryLock(10, 30, TimeUnit.SECONDS);
+
+            if (!acquired) {
+                throw new LockAcquisitionException("Failed to acquire lock: " + lockKey);
+            }
+
+            log.info("Lock acquired with fixed lease: {}", lockKey);
+            task.run();
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LockAcquisitionException("Interrupted", e);
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+}
+```
+
+### 8.4 대응 전략 2: 락 소유권 검증 (Fencing Token)
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class FencingTokenLockService {
+
+    private final RedissonClient redissonClient;
+    private final StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * Fencing Token을 사용한 안전한 락
+     *
+     * 원리:
+     * 1. 락 획득 시 단조 증가하는 토큰 발급
+     * 2. 리소스 변경 시 토큰 검증
+     * 3. 더 큰 토큰으로 변경된 경우 거부
+     */
+    public <T> T executeWithFencingToken(String resourceId, FencedOperation<T> operation) {
+        String lockKey = "lock:fenced:" + resourceId;
+        String tokenKey = "token:fenced:" + resourceId;
+
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            if (!lock.tryLock(10, 30, TimeUnit.SECONDS)) {
+                throw new LockAcquisitionException("Failed to acquire lock");
+            }
+
+            // Fencing Token 발급 (단조 증가)
+            Long fencingToken = stringRedisTemplate.opsForValue()
+                    .increment(tokenKey);
+
+            log.info("Lock acquired: key={}, fencingToken={}", lockKey, fencingToken);
+
+            // 토큰과 함께 작업 실행
+            return operation.execute(fencingToken);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LockAcquisitionException("Interrupted", e);
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    @FunctionalInterface
+    public interface FencedOperation<T> {
+        T execute(Long fencingToken);
+    }
+}
+
+// 사용 예시: 리소스 저장 시 토큰 검증
+@Service
+@RequiredArgsConstructor
+public class StockService {
+
+    private final FencingTokenLockService lockService;
+    private final StockRepository stockRepository;
+
+    public void updateStock(Long productId, int newQuantity) {
+        lockService.executeWithFencingToken("stock:" + productId, (fencingToken) -> {
+            Stock stock = stockRepository.findByProductId(productId)
+                    .orElseThrow();
+
+            // Fencing Token 검증
+            if (stock.getLastFencingToken() != null &&
+                stock.getLastFencingToken() >= fencingToken) {
+                log.warn("Stale operation detected: current={}, new={}",
+                        stock.getLastFencingToken(), fencingToken);
+                throw new StaleOperationException("Operation rejected by fencing token");
+            }
+
+            stock.setQuantity(newQuantity);
+            stock.setLastFencingToken(fencingToken);
+            return stockRepository.save(stock);
+        });
+    }
+}
+```
+
+### 8.5 대응 전략 3: 안전한 락 해제 (Lua Script)
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class SafeLockReleaseService {
+
+    private final StringRedisTemplate redisTemplate;
+
+    // 소유자 검증 후 삭제하는 Lua 스크립트
+    private static final String SAFE_UNLOCK_SCRIPT = """
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+            return redis.call('del', KEYS[1])
+        else
+            return 0
+        end
+        """;
+
+    private final RedisScript<Long> safeUnlockScript = new DefaultRedisScript<>(
+            SAFE_UNLOCK_SCRIPT, Long.class);
+
+    /**
+     * 직접 구현하는 안전한 분산 락
+     * (Redisson을 사용하지 않는 경우)
+     */
+    public boolean tryLock(String lockKey, String ownerId, Duration ttl) {
+        Boolean acquired = redisTemplate.opsForValue()
+                .setIfAbsent(lockKey, ownerId, ttl);
+        return Boolean.TRUE.equals(acquired);
+    }
+
+    /**
+     * 소유자 검증 후 안전하게 해제
+     *
+     * 문제: 단순 DEL은 다른 서버의 락을 삭제할 수 있음
+     * 해결: GET + 비교 + DEL을 원자적으로 수행 (Lua Script)
+     */
+    public boolean safeUnlock(String lockKey, String ownerId) {
+        Long result = redisTemplate.execute(
+                safeUnlockScript,
+                List.of(lockKey),
+                ownerId
+        );
+
+        if (result != null && result == 1) {
+            log.debug("Lock released successfully: key={}, owner={}", lockKey, ownerId);
+            return true;
+        } else {
+            log.warn("Lock release failed (not owner or expired): key={}, owner={}",
+                    lockKey, ownerId);
+            return false;
+        }
+    }
+
+    /**
+     * 사용 예시
+     */
+    public void executeWithSafeLock(String resourceId, Runnable task) {
+        String lockKey = "lock:" + resourceId;
+        String ownerId = UUID.randomUUID().toString();
+
+        try {
+            if (!tryLock(lockKey, ownerId, Duration.ofSeconds(30))) {
+                throw new LockAcquisitionException("Failed to acquire lock: " + lockKey);
+            }
+
+            task.run();
+
+        } finally {
+            safeUnlock(lockKey, ownerId);
+        }
+    }
+}
+```
+
+### 8.6 대응 전략 4: 락 상태 모니터링
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class LockMonitoringService {
+
+    private final RedissonClient redissonClient;
+    private final StringRedisTemplate redisTemplate;
+    private final MeterRegistry meterRegistry;
+
+    /**
+     * 락 상태 모니터링 및 알림
+     */
+    @Scheduled(fixedRate = 30000)
+    public void monitorLocks() {
+        // 주요 락 키 패턴 모니터링
+        Set<String> lockKeys = redisTemplate.keys("lock:*");
+
+        if (lockKeys != null) {
+            int activeLocks = lockKeys.size();
+            meterRegistry.gauge("redis.lock.active", activeLocks);
+
+            for (String lockKey : lockKeys) {
+                Long ttl = redisTemplate.getExpire(lockKey, TimeUnit.SECONDS);
+
+                if (ttl != null && ttl > 0) {
+                    // TTL이 곧 만료될 락 경고
+                    if (ttl < 5) {
+                        log.warn("Lock about to expire: key={}, ttl={}s", lockKey, ttl);
+                        meterRegistry.counter("redis.lock.expiring.soon").increment();
+                    }
+                } else if (ttl != null && ttl == -1) {
+                    // TTL 없는 락 (위험)
+                    log.error("Lock without TTL detected: key={}", lockKey);
+                    meterRegistry.counter("redis.lock.no.ttl").increment();
+                }
+            }
+        }
+    }
+
+    /**
+     * 장기 보유 락 탐지
+     */
+    @Scheduled(fixedRate = 60000)
+    public void detectLongHeldLocks() {
+        // 락 획득 시간 기록 키
+        Set<String> lockTimeKeys = redisTemplate.keys("lock:acquired:*");
+
+        if (lockTimeKeys != null) {
+            Instant threshold = Instant.now().minus(Duration.ofMinutes(5));
+
+            for (String timeKey : lockTimeKeys) {
+                String acquiredTimeStr = redisTemplate.opsForValue().get(timeKey);
+
+                if (acquiredTimeStr != null) {
+                    Instant acquiredTime = Instant.parse(acquiredTimeStr);
+
+                    if (acquiredTime.isBefore(threshold)) {
+                        String lockKey = timeKey.replace("lock:acquired:", "lock:");
+                        log.warn("Long-held lock detected: key={}, acquiredAt={}",
+                                lockKey, acquiredTime);
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### 8.7 Phantom Key 대응 체크리스트
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Phantom Key 대응 체크리스트                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  설계 단계 (Design)                                                   │
+│  [ ] Watch Dog 사용 여부 결정 (자동 연장 vs 고정 TTL)                  │
+│  [ ] 적정 TTL 산정 (예상 처리 시간 × 2~3배)                           │
+│  [ ] Fencing Token 필요 여부 검토                                     │
+│  [ ] 락 해제 방식 결정 (Lua Script로 소유자 검증)                      │
+│                                                                       │
+│  구현 단계 (Implementation)                                           │
+│  [ ] Redisson Watch Dog 활용 또는 수동 연장 구현                       │
+│  [ ] isHeldByCurrentThread() 체크 후 unlock                           │
+│  [ ] 락 획득/해제 로깅                                                 │
+│  [ ] 락 관련 메트릭 수집                                               │
+│                                                                       │
+│  운영 단계 (Operation)                                                │
+│  [ ] TTL 없는 락 탐지 알림                                            │
+│  [ ] 장기 보유 락 모니터링                                             │
+│  [ ] 락 만료 임박 경고                                                 │
+│  [ ] 락 관련 장애 런북 작성                                            │
+│                                                                       │
+│  테스트 (Testing)                                                      │
+│  [ ] GC pause 시뮬레이션 테스트                                        │
+│  [ ] 네트워크 지연 시뮬레이션 테스트                                    │
+│  [ ] 동시 락 획득 테스트                                               │
+│  [ ] 락 만료 시나리오 테스트                                           │
+│                                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.8 락 타임아웃 전략 결정 가이드
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     락 타임아웃 전략 결정 가이드                        │
+│                                                                       │
+│   작업 유형별 권장 전략:                                               │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                                                              │   │
+│   │  [짧은 작업 (< 1초)]                                         │   │
+│   │  - 전략: 고정 TTL (5~10초)                                   │   │
+│   │  - Watch Dog: 불필요                                         │   │
+│   │  - 예: 재고 차감, 포인트 적립                                 │   │
+│   │                                                              │   │
+│   │  [중간 작업 (1~30초)]                                        │   │
+│   │  - 전략: Watch Dog 또는 충분한 TTL (60초)                    │   │
+│   │  - 예: 주문 처리, 결제 처리                                   │   │
+│   │                                                              │   │
+│   │  [긴 작업 (> 30초)]                                          │   │
+│   │  - 전략: Watch Dog 필수                                      │   │
+│   │  - 주의: 작업 분할 검토                                       │   │
+│   │  - 예: 배치 처리, 리포트 생성                                 │   │
+│   │                                                              │   │
+│   │  [불확실한 작업]                                              │   │
+│   │  - 전략: Watch Dog + Fencing Token                           │   │
+│   │  - 예: 외부 API 호출, 복잡한 비즈니스 로직                    │   │
+│   │                                                              │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   Redisson 설정 예시:                                                 │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  Config config = new Config();                               │   │
+│   │  config.setLockWatchdogTimeout(30000);  // 30초 (기본값)     │   │
+│   │                                                              │   │
+│   │  // Watch Dog 연장 주기 = lockWatchdogTimeout / 3 = 10초     │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. 테스트
 
 ### 분산 락 테스트
 

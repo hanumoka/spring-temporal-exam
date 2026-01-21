@@ -456,7 +456,490 @@ public class PendingMessageProcessor {
 
 ---
 
-## 6. 실전 패턴: 주문 이벤트 처리
+## 6. Pending List 심화: 문제와 대응 전략
+
+### 6.1 Pending List 구조 이해
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                 Pending Entries List (PEL) 상세 구조                  │
+│                                                                       │
+│   Consumer Group: order-processors                                   │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  PEL Entry 구조:                                             │   │
+│   │  ┌─────────────────────────────────────────────────────────┐│   │
+│   │  │ Message ID      │ 1609459200000-0                       ││   │
+│   │  │ Consumer Name   │ consumer-1                            ││   │
+│   │  │ Delivery Time   │ 2024-01-15 10:30:00 (첫 전달 시간)     ││   │
+│   │  │ Delivery Count  │ 3 (전달 횟수)                          ││   │
+│   │  └─────────────────────────────────────────────────────────┘│   │
+│   │                                                              │   │
+│   │  중요 속성:                                                   │   │
+│   │  • idle time: 마지막 전달 후 경과 시간                        │   │
+│   │  • delivery count: XCLAIM/XREADGROUP 호출 횟수                │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Pending List 주요 문제
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Pending List 문제 시나리오                         │
+│                                                                       │
+│   [문제 1: 고아 메시지 (Orphaned Messages)]                           │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  1. Consumer-1이 msg1, msg2 수신                             │   │
+│   │  2. Consumer-1 처리 중 크래시! 💥                            │   │
+│   │  3. msg1, msg2는 PEL에 영원히 남음 (ACK 불가)                 │   │
+│   │  4. Consumer-1 재시작해도 새 메시지만 수신 (>)                │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   [문제 2: 무한 재시도 루프]                                          │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  1. msg1 수신 → 처리 실패 → ACK 안함                          │   │
+│   │  2. XCLAIM으로 다시 가져옴 → 또 실패                          │   │
+│   │  3. 반복... delivery_count만 증가                             │   │
+│   │  4. 독이 된 메시지가 계속 시스템 리소스 소모                   │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   [문제 3: 메모리 누수]                                               │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  • PEL은 Redis 메모리에 저장                                  │   │
+│   │  • ACK 안 된 메시지가 쌓이면 메모리 고갈                       │   │
+│   │  • Stream MAXLEN과 별개로 PEL은 계속 성장                     │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│   [문제 4: 중복 처리 (Duplicate Processing)]                          │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  T0: Consumer-1이 msg1 수신, 처리 시작                        │   │
+│   │  T5: Consumer-1이 느려서 idle time 초과                       │   │
+│   │  T6: Consumer-2가 XCLAIM으로 msg1 가져감                      │   │
+│   │  T7: Consumer-1, Consumer-2 둘 다 msg1 처리 완료! 💥          │   │
+│   │      → 중복 처리 발생                                         │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.3 Pending 메시지 조회 명령어
+
+```bash
+# Pending 요약 정보
+XPENDING orders order-processors
+# 결과: 총 개수, 최소 ID, 최대 ID, Consumer별 개수
+
+# Pending 상세 조회
+XPENDING orders order-processors - + 100
+# 결과: [message-id, consumer-name, idle-time, delivery-count]
+
+# 특정 Consumer의 Pending 조회
+XPENDING orders order-processors - + 100 consumer-1
+
+# idle time이 긴 메시지만 조회 (60초 이상)
+XPENDING orders order-processors IDLE 60000 - + 100
+```
+
+### 6.4 대응 전략 1: 체계적인 Pending 복구
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class PendingMessageRecoveryService {
+
+    private final StringRedisTemplate redisTemplate;
+    private final MeterRegistry meterRegistry;
+
+    private static final String STREAM_KEY = "orders";
+    private static final String GROUP_NAME = "order-processors";
+    private static final String RECOVERY_CONSUMER = "recovery-consumer";
+
+    // Pending 복구 설정
+    private static final Duration IDLE_THRESHOLD = Duration.ofMinutes(5);
+    private static final int MAX_DELIVERY_COUNT = 3;
+    private static final int BATCH_SIZE = 100;
+
+    /**
+     * 고아 메시지 복구 스케줄러
+     * - idle time이 임계값을 초과한 메시지 탐지
+     * - delivery count에 따라 재처리 또는 DLQ 이동
+     */
+    @Scheduled(fixedRate = 60000)  // 1분마다
+    public void recoverOrphanedMessages() {
+        log.info("Starting pending message recovery...");
+
+        try {
+            // 1. Pending 메시지 조회
+            PendingMessages pending = redisTemplate.opsForStream()
+                    .pending(STREAM_KEY, GROUP_NAME, Range.unbounded(), BATCH_SIZE);
+
+            int recovered = 0;
+            int movedToDlq = 0;
+
+            for (PendingMessage msg : pending) {
+                // 2. idle time 체크
+                if (msg.getElapsedTimeSinceLastDelivery().compareTo(IDLE_THRESHOLD) < 0) {
+                    continue;  // 아직 처리 중일 수 있음
+                }
+
+                // 3. delivery count 체크
+                if (msg.getTotalDeliveryCount() >= MAX_DELIVERY_COUNT) {
+                    // DLQ로 이동
+                    moveToDeadLetterQueue(msg);
+                    movedToDlq++;
+                } else {
+                    // 재처리를 위해 XCLAIM
+                    claimAndRequeue(msg);
+                    recovered++;
+                }
+            }
+
+            // 4. 메트릭 기록
+            meterRegistry.counter("redis.stream.pending.recovered").increment(recovered);
+            meterRegistry.counter("redis.stream.pending.dlq").increment(movedToDlq);
+
+            log.info("Recovery completed: recovered={}, movedToDlq={}", recovered, movedToDlq);
+
+        } catch (Exception e) {
+            log.error("Pending recovery failed", e);
+            meterRegistry.counter("redis.stream.pending.recovery.error").increment();
+        }
+    }
+
+    private void claimAndRequeue(PendingMessage pendingMsg) {
+        try {
+            // XCLAIM으로 메시지 소유권 가져오기
+            List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream()
+                    .claim(STREAM_KEY, GROUP_NAME, RECOVERY_CONSUMER,
+                           IDLE_THRESHOLD, pendingMsg.getId());
+
+            if (!claimed.isEmpty()) {
+                log.info("Claimed message for recovery: id={}, deliveryCount={}",
+                        pendingMsg.getId(), pendingMsg.getTotalDeliveryCount());
+
+                // 재처리 로직 또는 재처리 큐에 추가
+                for (MapRecord<String, Object, Object> record : claimed) {
+                    processRecoveredMessage(record);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to claim message: {}", pendingMsg.getId(), e);
+        }
+    }
+
+    private void moveToDeadLetterQueue(PendingMessage pendingMsg) {
+        try {
+            // 1. 원본 메시지 조회
+            List<MapRecord<String, Object, Object>> messages = redisTemplate.opsForStream()
+                    .range(STREAM_KEY, Range.closed(
+                            pendingMsg.getId().getValue(),
+                            pendingMsg.getId().getValue()));
+
+            if (!messages.isEmpty()) {
+                MapRecord<String, Object, Object> original = messages.get(0);
+
+                // 2. DLQ에 메시지 복사 (메타데이터 추가)
+                Map<String, Object> dlqMessage = new HashMap<>(original.getValue());
+                dlqMessage.put("_original_id", pendingMsg.getId().getValue());
+                dlqMessage.put("_delivery_count", String.valueOf(pendingMsg.getTotalDeliveryCount()));
+                dlqMessage.put("_failed_at", Instant.now().toString());
+                dlqMessage.put("_consumer", pendingMsg.getConsumerName());
+
+                redisTemplate.opsForStream().add(
+                        StreamRecords.mapBacked(dlqMessage).withStreamKey(STREAM_KEY + ":dlq"));
+
+                // 3. 원본 ACK (PEL에서 제거)
+                redisTemplate.opsForStream()
+                        .acknowledge(STREAM_KEY, GROUP_NAME, pendingMsg.getId());
+
+                log.warn("Moved to DLQ: id={}, deliveryCount={}",
+                        pendingMsg.getId(), pendingMsg.getTotalDeliveryCount());
+            }
+        } catch (Exception e) {
+            log.error("Failed to move to DLQ: {}", pendingMsg.getId(), e);
+        }
+    }
+
+    private void processRecoveredMessage(MapRecord<String, Object, Object> record) {
+        // 복구된 메시지 처리 로직
+        // 처리 성공 시 ACK
+    }
+}
+```
+
+### 6.5 대응 전략 2: 중복 처리 방지 (멱등성)
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class IdempotentStreamConsumer implements StreamListener<String, MapRecord<String, String, String>> {
+
+    private final StringRedisTemplate redisTemplate;
+    private final OrderService orderService;
+
+    private static final String STREAM_KEY = "orders";
+    private static final String GROUP_NAME = "order-processors";
+    private static final String PROCESSED_KEY_PREFIX = "processed:";
+    private static final Duration PROCESSED_TTL = Duration.ofHours(24);
+
+    @Override
+    public void onMessage(MapRecord<String, String, String> message) {
+        String messageId = message.getId().getValue();
+        String processedKey = PROCESSED_KEY_PREFIX + messageId;
+
+        try {
+            // 1. 이미 처리된 메시지인지 확인 (SETNX)
+            Boolean isNew = redisTemplate.opsForValue()
+                    .setIfAbsent(processedKey, "processing", PROCESSED_TTL);
+
+            if (Boolean.FALSE.equals(isNew)) {
+                // 이미 처리 중이거나 완료된 메시지
+                log.info("Message already processed, skipping: {}", messageId);
+                acknowledgeMessage(message);
+                return;
+            }
+
+            // 2. 메시지 처리
+            processMessage(message);
+
+            // 3. 처리 완료 마킹
+            redisTemplate.opsForValue().set(processedKey, "completed", PROCESSED_TTL);
+
+            // 4. ACK
+            acknowledgeMessage(message);
+
+            log.debug("Message processed successfully: {}", messageId);
+
+        } catch (Exception e) {
+            log.error("Failed to process message: {}", messageId, e);
+
+            // 처리 실패 시 processed 키 삭제 (재시도 허용)
+            redisTemplate.delete(processedKey);
+
+            // ACK 안함 → Pending 상태 유지 → 나중에 XCLAIM으로 재처리
+        }
+    }
+
+    private void processMessage(MapRecord<String, String, String> message) {
+        // 실제 비즈니스 로직
+        String eventType = message.getValue().get("eventType");
+        String payload = message.getValue().get("payload");
+
+        if ("ORDER_CREATED".equals(eventType)) {
+            orderService.processOrderCreated(payload);
+        }
+    }
+
+    private void acknowledgeMessage(MapRecord<String, String, String> message) {
+        redisTemplate.opsForStream()
+                .acknowledge(STREAM_KEY, GROUP_NAME, message.getId());
+    }
+}
+```
+
+### 6.6 대응 전략 3: Consumer 헬스체크 및 자동 정리
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class ConsumerHealthManager {
+
+    private final StringRedisTemplate redisTemplate;
+
+    private static final String STREAM_KEY = "orders";
+    private static final String GROUP_NAME = "order-processors";
+    private static final Duration CONSUMER_INACTIVE_THRESHOLD = Duration.ofMinutes(30);
+
+    /**
+     * 비활성 Consumer 정리
+     * - 오랫동안 메시지를 읽지 않은 Consumer 제거
+     * - 해당 Consumer의 Pending 메시지는 다른 Consumer가 XCLAIM
+     */
+    @Scheduled(fixedRate = 300000)  // 5분마다
+    public void cleanupInactiveConsumers() {
+        try {
+            StreamInfo.XInfoConsumers consumers = redisTemplate.opsForStream()
+                    .consumers(STREAM_KEY, GROUP_NAME);
+
+            for (StreamInfo.XInfoConsumer consumer : consumers) {
+                Duration idleTime = consumer.idleTime();
+
+                if (idleTime.compareTo(CONSUMER_INACTIVE_THRESHOLD) > 0) {
+                    // Pending 메시지가 있는지 확인
+                    long pendingCount = consumer.pendingCount();
+
+                    if (pendingCount == 0) {
+                        // Pending 없으면 Consumer 삭제
+                        redisTemplate.opsForStream()
+                                .deleteConsumer(STREAM_KEY, GROUP_NAME, consumer.consumerName());
+
+                        log.info("Removed inactive consumer: name={}, idleTime={}",
+                                consumer.consumerName(), idleTime);
+                    } else {
+                        log.warn("Inactive consumer has pending messages: name={}, pending={}, idleTime={}",
+                                consumer.consumerName(), pendingCount, idleTime);
+                        // Pending 메시지는 Recovery 스케줄러가 처리
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to cleanup inactive consumers", e);
+        }
+    }
+}
+```
+
+### 6.7 Pending 모니터링 대시보드
+
+```java
+@RestController
+@RequestMapping("/admin/stream")
+@RequiredArgsConstructor
+public class StreamMonitoringController {
+
+    private final StringRedisTemplate redisTemplate;
+
+    @GetMapping("/pending/summary")
+    public PendingSummary getPendingSummary(
+            @RequestParam String streamKey,
+            @RequestParam String groupName) {
+
+        PendingMessagesSummary summary = redisTemplate.opsForStream()
+                .pending(streamKey, groupName);
+
+        return PendingSummary.builder()
+                .totalPending(summary.getTotalPendingMessages())
+                .minId(summary.minMessageId())
+                .maxId(summary.maxMessageId())
+                .consumerPendingCounts(summary.getPendingMessagesPerConsumer())
+                .build();
+    }
+
+    @GetMapping("/pending/details")
+    public List<PendingMessageDetail> getPendingDetails(
+            @RequestParam String streamKey,
+            @RequestParam String groupName,
+            @RequestParam(defaultValue = "100") int limit) {
+
+        PendingMessages pending = redisTemplate.opsForStream()
+                .pending(streamKey, groupName, Range.unbounded(), limit);
+
+        return pending.stream()
+                .map(msg -> PendingMessageDetail.builder()
+                        .messageId(msg.getId().getValue())
+                        .consumerName(msg.getConsumerName())
+                        .idleTimeMs(msg.getElapsedTimeSinceLastDelivery().toMillis())
+                        .deliveryCount(msg.getTotalDeliveryCount())
+                        .build())
+                .toList();
+    }
+
+    @GetMapping("/consumers")
+    public List<ConsumerInfo> getConsumers(
+            @RequestParam String streamKey,
+            @RequestParam String groupName) {
+
+        return redisTemplate.opsForStream()
+                .consumers(streamKey, groupName)
+                .stream()
+                .map(c -> ConsumerInfo.builder()
+                        .name(c.consumerName())
+                        .pendingCount(c.pendingCount())
+                        .idleTimeMs(c.idleTime().toMillis())
+                        .build())
+                .toList();
+    }
+}
+```
+
+### 6.8 Pending 관련 메트릭
+
+```java
+@Component
+@RequiredArgsConstructor
+public class StreamPendingMetrics {
+
+    private final StringRedisTemplate redisTemplate;
+    private final MeterRegistry meterRegistry;
+
+    @Scheduled(fixedRate = 30000)
+    public void collectPendingMetrics() {
+        String streamKey = "orders";
+        String groupName = "order-processors";
+
+        try {
+            // 전체 Pending 수
+            PendingMessagesSummary summary = redisTemplate.opsForStream()
+                    .pending(streamKey, groupName);
+
+            meterRegistry.gauge("redis.stream.pending.total",
+                    Tags.of("stream", streamKey, "group", groupName),
+                    summary.getTotalPendingMessages());
+
+            // Consumer별 Pending
+            summary.getPendingMessagesPerConsumer().forEach((consumer, count) ->
+                    meterRegistry.gauge("redis.stream.pending.by_consumer",
+                            Tags.of("stream", streamKey, "group", groupName, "consumer", consumer),
+                            count));
+
+            // 오래된 Pending (5분 이상)
+            PendingMessages oldPending = redisTemplate.opsForStream()
+                    .pending(streamKey, Consumer.from(groupName, "*"),
+                            Range.unbounded(), 1000);
+
+            long oldCount = oldPending.stream()
+                    .filter(msg -> msg.getElapsedTimeSinceLastDelivery().toMinutes() > 5)
+                    .count();
+
+            meterRegistry.gauge("redis.stream.pending.old",
+                    Tags.of("stream", streamKey, "group", groupName),
+                    oldCount);
+
+        } catch (Exception e) {
+            // 메트릭 수집 실패 로깅
+        }
+    }
+}
+```
+
+### 6.9 Pending 문제 대응 체크리스트
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Pending 문제 대응 체크리스트                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  예방 (Prevention)                                                    │
+│  [ ] Consumer에서 적절한 타임아웃 설정                                 │
+│  [ ] 처리 완료 후 즉시 ACK                                            │
+│  [ ] 멱등성 처리로 중복 처리 방지                                      │
+│  [ ] Consumer 장애 시 graceful shutdown으로 ACK 완료                   │
+│                                                                       │
+│  탐지 (Detection)                                                     │
+│  [ ] Pending 메시지 수 모니터링                                        │
+│  [ ] 오래된 Pending (idle time) 알림                                   │
+│  [ ] Consumer별 Pending 불균형 감지                                    │
+│  [ ] DLQ 메시지 수 모니터링                                            │
+│                                                                       │
+│  복구 (Recovery)                                                       │
+│  [ ] XCLAIM으로 고아 메시지 복구                                       │
+│  [ ] 최대 재시도 횟수 초과 시 DLQ 이동                                 │
+│  [ ] 비활성 Consumer 자동 정리                                         │
+│  [ ] DLQ 메시지 수동/자동 재처리                                       │
+│                                                                       │
+│  운영 (Operation)                                                      │
+│  [ ] Pending 현황 대시보드                                             │
+│  [ ] DLQ 처리 프로세스 정의                                            │
+│  [ ] 장애 시 복구 런북 작성                                            │
+│                                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 7. 실전 패턴: 주문 이벤트 처리
 
 ### 전체 아키텍처
 

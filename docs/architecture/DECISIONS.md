@@ -16,6 +16,7 @@
 | D010 | 동시성 제어 | 서비스별 차별화 적용 |
 | D011 | ORM 전략 | JPA + MyBatis 병행 학습 |
 | D012 | 트랜잭션 관리 | TransactionTemplate (프로그래밍 방식) |
+| D013 | Redis 운영 전략 | Pending List 복구 + Phantom Key 대응 |
 
 ---
 
@@ -461,6 +462,92 @@ public Order createOrder(OrderRequest request) {
 ### 관련 문서
 
 - [09-transaction-template.md](../study/phase2a/09-transaction-template.md) - TransactionTemplate 학습
+
+---
+
+## D013. Redis 운영 전략
+
+**결정**: Pending List 체계적 복구 + Phantom Key 대응 전략 수립
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                Redis 운영 시 주요 위험 요소                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Redis Stream - Pending List 문제]                                  │
+│  ├── 고아 메시지: Consumer 크래시 시 ACK 안 된 메시지 방치            │
+│  ├── 무한 재시도: 처리 실패 메시지가 계속 순환                        │
+│  ├── 메모리 누수: PEL(Pending Entries List) 무한 성장                │
+│  └── 중복 처리: XCLAIM 시 원래 Consumer도 처리 중일 수 있음          │
+│                                                                      │
+│  [Redisson - Phantom Key 문제]                                       │
+│  ├── 락 TTL 만료: 처리 중 락이 사라져 동시 접근 발생                 │
+│  ├── 다른 서버 락 삭제: unlock 시 다른 서버의 락을 삭제할 수 있음    │
+│  └── Check-then-Act: EXISTS 후 GET 사이에 키가 삭제될 수 있음        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Pending List 대응 전략
+
+| 전략 | 구현 방법 | 목적 |
+|------|----------|------|
+| **주기적 복구** | XCLAIM + 스케줄러 | 고아 메시지 재처리 |
+| **DLQ 이동** | 최대 재시도 초과 시 DLQ로 | 독 메시지 격리 |
+| **멱등성 처리** | SETNX로 처리 여부 기록 | 중복 처리 방지 |
+| **Consumer 정리** | 비활성 Consumer 자동 삭제 | 리소스 정리 |
+| **모니터링** | Pending 수, idle time 메트릭 | 문제 조기 탐지 |
+
+### Phantom Key 대응 전략
+
+| 전략 | 구현 방법 | 목적 |
+|------|----------|------|
+| **Watch Dog** | leaseTime 미지정 (자동 연장) | 락 자동 연장 |
+| **Fencing Token** | 단조 증가 토큰 발급 및 검증 | 지연된 쓰기 방지 |
+| **안전한 해제** | Lua Script로 소유자 검증 | 다른 락 삭제 방지 |
+| **락 모니터링** | TTL 없는 락, 장기 보유 락 탐지 | 이상 상태 감지 |
+
+### 락 타임아웃 전략
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    작업 유형별 락 전략                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [짧은 작업 < 1초]         → 고정 TTL (5~10초)                       │
+│  예: 재고 차감, 포인트 적립                                          │
+│                                                                      │
+│  [중간 작업 1~30초]        → Watch Dog 또는 충분한 TTL (60초)        │
+│  예: 주문 처리, 결제 처리                                            │
+│                                                                      │
+│  [긴 작업 > 30초]          → Watch Dog 필수                          │
+│  예: 배치 처리, 리포트 생성                                          │
+│                                                                      │
+│  [불확실한 작업]           → Watch Dog + Fencing Token               │
+│  예: 외부 API 호출, 복잡한 비즈니스 로직                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 필수 모니터링 항목
+
+| 카테고리 | 메트릭 | 알림 조건 |
+|----------|--------|----------|
+| **Pending** | `redis.stream.pending.total` | > 1000 |
+| **Pending** | `redis.stream.pending.old` (5분 이상) | > 100 |
+| **DLQ** | `redis.stream.dlq.size` | > 0 |
+| **Lock** | `redis.lock.active` | 급격한 변화 |
+| **Lock** | `redis.lock.no.ttl` | > 0 (즉시 알림) |
+| **Lock** | `redis.lock.expiring.soon` | > 10 |
+
+### 관련 문서
+
+| 문서 | 내용 |
+|------|------|
+| [02-redis-stream.md](../study/phase2b/02-redis-stream.md) | Pending List 심화 (섹션 6) |
+| [03-redisson.md](../study/phase2b/03-redisson.md) | Phantom Key와 락 타임아웃 (섹션 8) |
 
 ---
 
