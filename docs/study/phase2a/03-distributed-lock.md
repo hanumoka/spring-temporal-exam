@@ -1,0 +1,579 @@
+# 분산 락 (Distributed Lock)
+
+## 이 문서에서 배우는 것
+
+- 분산 환경에서의 동시성 문제 이해
+- 분산 락의 개념과 필요성
+- Redis + Redisson을 활용한 분산 락 구현
+- 실무 적용 패턴
+
+---
+
+## 1. 분산 환경에서의 동시성 문제
+
+### 단일 서버에서의 동시성 제어
+
+```java
+// 단일 서버: synchronized로 해결 가능
+public synchronized void decreaseStock(Long productId, int quantity) {
+    Product product = productRepository.findById(productId);
+    product.decreaseStock(quantity);
+    productRepository.save(product);
+}
+```
+
+### 다중 서버에서의 문제
+
+```
+서버 A                        서버 B
+  │                             │
+  │  재고 조회: 100개           │  재고 조회: 100개
+  │        ↓                    │        ↓
+  │  100 - 1 = 99              │  100 - 1 = 99
+  │        ↓                    │        ↓
+  │  저장: 99개                 │  저장: 99개  ← 동시 저장!
+  │                             │
+  └──────────────────────────────┘
+              결과: 99개 (2개 팔았는데 1개만 차감됨!)
+```
+
+**문제**: `synchronized`는 같은 JVM 내에서만 동작. 다른 서버의 요청은 제어 불가!
+
+### 해결 방법: 분산 락
+
+```
+서버 A                        서버 B
+  │                             │
+  │  락 획득 시도               │  락 획득 시도
+  │  ✓ 락 획득!                 │  ✗ 대기...
+  │        ↓                    │     │
+  │  재고 조회: 100개           │     │
+  │  100 - 1 = 99              │     │
+  │  저장: 99개                 │     │
+  │        ↓                    │     │
+  │  락 해제                    │  ✓ 락 획득!
+  │                             │        ↓
+  │                             │  재고 조회: 99개
+  │                             │  99 - 1 = 98
+  │                             │  저장: 98개
+  │                             │        ↓
+  │                             │  락 해제
+  └──────────────────────────────┘
+              결과: 98개 (정확!)
+```
+
+---
+
+## 2. 분산 락 구현 방법
+
+### 2.1 DB 기반 락
+
+```sql
+-- 별도 락 테이블 사용
+SELECT * FROM locks WHERE name = 'stock_lock' FOR UPDATE;
+```
+
+**장점**: 별도 인프라 불필요
+**단점**: DB 부하, 성능 이슈
+
+### 2.2 Redis 기반 락 (Redisson)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Redis                                 │
+│                                                              │
+│  Key: "lock:stock:product:123"                              │
+│  Value: "서버A의 고유 ID"                                    │
+│  TTL: 30초 (자동 만료)                                       │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+        ▲                           ▲
+        │ 락 획득                    │ 락 획득 실패 (대기)
+        │                           │
+   ┌────┴────┐                 ┌────┴────┐
+   │ 서버 A  │                 │ 서버 B  │
+   └─────────┘                 └─────────┘
+```
+
+**장점**: 빠른 성능, 자동 만료, 분산 환경에 적합
+**단점**: Redis 의존성
+
+### 2.3 ZooKeeper 기반 락
+
+강력한 일관성 보장, 하지만 설정이 복잡.
+
+---
+
+## 3. Redisson 소개
+
+### Redisson이란?
+
+**Redisson**은 Redis 기반의 Java 분산 객체/컬렉션 라이브러리입니다.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Redisson                                │
+│                                                              │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
+│  │    Lock    │ │  RMap      │ │  RQueue    │   ...        │
+│  │ (분산 락)  │ │ (분산 맵)  │ │ (분산 큐)  │              │
+│  └────────────┘ └────────────┘ └────────────┘              │
+│                                                              │
+│         ↓                ↓                ↓                 │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                     Redis                            │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 의존성 추가
+
+```groovy
+// build.gradle
+dependencies {
+    implementation 'org.redisson:redisson-spring-boot-starter:3.27.0'
+}
+```
+
+### 설정
+
+```yaml
+# application.yml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+# Redisson 상세 설정 (선택)
+redisson:
+  single-server-config:
+    address: "redis://localhost:6379"
+    connection-minimum-idle-size: 5
+    connection-pool-size: 10
+```
+
+---
+
+## 4. Redisson Lock 사용법
+
+### 4.1 기본 사용법
+
+```java
+@Service
+@RequiredArgsConstructor
+public class InventoryService {
+
+    private final RedissonClient redissonClient;
+    private final ProductRepository productRepository;
+
+    public void decreaseStock(Long productId, int quantity) {
+        // 락 키 생성 (상품별로 다른 락)
+        String lockKey = "lock:stock:product:" + productId;
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            // 락 획득 시도 (최대 10초 대기, 획득 후 5초간 유지)
+            boolean acquired = lock.tryLock(10, 5, TimeUnit.SECONDS);
+
+            if (!acquired) {
+                throw new LockAcquisitionException("락 획득 실패");
+            }
+
+            // 락 획득 성공 - 비즈니스 로직 실행
+            Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ProductNotFoundException(productId));
+
+            product.decreaseStock(quantity);
+            productRepository.save(product);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LockAcquisitionException("락 획득 중 인터럽트 발생");
+        } finally {
+            // 락 해제 (반드시 finally에서!)
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+}
+```
+
+### 4.2 tryLock 파라미터 설명
+
+```java
+lock.tryLock(waitTime, leaseTime, TimeUnit)
+```
+
+| 파라미터 | 설명 | 권장 값 |
+|----------|------|---------|
+| waitTime | 락 획득 대기 시간 | 5~30초 |
+| leaseTime | 락 자동 해제 시간 | 작업 예상 시간 + 여유 |
+| TimeUnit | 시간 단위 | SECONDS |
+
+### 4.3 어노테이션 기반 사용 (커스텀)
+
+```java
+// 커스텀 어노테이션 정의
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface DistributedLock {
+    String key();                    // 락 키
+    long waitTime() default 5;       // 대기 시간 (초)
+    long leaseTime() default 10;     // 유지 시간 (초)
+}
+```
+
+```java
+// AOP로 처리
+@Aspect
+@Component
+@RequiredArgsConstructor
+public class DistributedLockAspect {
+
+    private final RedissonClient redissonClient;
+
+    @Around("@annotation(distributedLock)")
+    public Object lock(ProceedingJoinPoint joinPoint, DistributedLock distributedLock)
+            throws Throwable {
+
+        String key = parseKey(distributedLock.key(), joinPoint);
+        RLock lock = redissonClient.getLock(key);
+
+        try {
+            boolean acquired = lock.tryLock(
+                distributedLock.waitTime(),
+                distributedLock.leaseTime(),
+                TimeUnit.SECONDS
+            );
+
+            if (!acquired) {
+                throw new LockAcquisitionException("락 획득 실패: " + key);
+            }
+
+            return joinPoint.proceed();
+
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private String parseKey(String keyExpression, ProceedingJoinPoint joinPoint) {
+        // SpEL 파싱 로직 (생략)
+        return keyExpression;
+    }
+}
+```
+
+```java
+// 사용
+@Service
+public class InventoryService {
+
+    @DistributedLock(key = "lock:stock:product:#{#productId}")
+    public void decreaseStock(Long productId, int quantity) {
+        // 락 관련 코드 없이 비즈니스 로직만!
+        Product product = productRepository.findById(productId)
+            .orElseThrow();
+        product.decreaseStock(quantity);
+        productRepository.save(product);
+    }
+}
+```
+
+---
+
+## 5. 락 종류
+
+### 5.1 RLock (일반 락)
+
+```java
+RLock lock = redissonClient.getLock("myLock");
+```
+
+- 재진입 가능 (같은 스레드가 여러 번 획득 가능)
+- 가장 일반적인 사용
+
+### 5.2 RReadWriteLock (읽기-쓰기 락)
+
+```java
+RReadWriteLock rwLock = redissonClient.getReadWriteLock("myRWLock");
+
+// 읽기 락 (여러 클라이언트 동시 획득 가능)
+RLock readLock = rwLock.readLock();
+readLock.lock();
+try {
+    // 읽기 작업
+} finally {
+    readLock.unlock();
+}
+
+// 쓰기 락 (단독 획득)
+RLock writeLock = rwLock.writeLock();
+writeLock.lock();
+try {
+    // 쓰기 작업
+} finally {
+    writeLock.unlock();
+}
+```
+
+**사용 시나리오**: 읽기가 많고 쓰기가 적은 경우
+
+### 5.3 RFencedLock (펜싱 락)
+
+```java
+RFencedLock lock = redissonClient.getFencedLock("myFencedLock");
+Long token = lock.lockAndGetToken();
+try {
+    // token을 사용하여 유효성 검증
+} finally {
+    lock.unlock();
+}
+```
+
+**사용 시나리오**: 더 강력한 안전성이 필요한 경우
+
+### 5.4 RSemaphore (세마포어)
+
+```java
+RSemaphore semaphore = redissonClient.getSemaphore("mySemaphore");
+semaphore.trySetPermits(5);  // 최대 5개 동시 접근
+
+semaphore.acquire();  // 허가 획득
+try {
+    // 작업 수행
+} finally {
+    semaphore.release();  // 허가 반환
+}
+```
+
+**사용 시나리오**: 동시 접근 수 제한 (예: API 호출 제한)
+
+---
+
+## 6. 주의사항 및 베스트 프랙티스
+
+### 6.1 락 키 설계
+
+```java
+// ✓ 좋은 예: 구체적인 키
+"lock:inventory:product:123"
+"lock:order:customer:456"
+
+// ✗ 나쁜 예: 너무 넓은 범위
+"lock:inventory"  // 모든 상품이 하나의 락 공유
+```
+
+### 6.2 leaseTime 설정
+
+```java
+// ✗ 나쁜 예: leaseTime 없음 (영구 락 위험)
+lock.lock();  // 서버 다운 시 락이 영원히 유지됨!
+
+// ✓ 좋은 예: 적절한 leaseTime 설정
+lock.tryLock(10, 30, TimeUnit.SECONDS);  // 30초 후 자동 해제
+```
+
+### 6.3 finally에서 unlock
+
+```java
+// ✓ 필수: finally에서 락 해제
+try {
+    lock.lock();
+    // 작업
+} finally {
+    if (lock.isHeldByCurrentThread()) {
+        lock.unlock();
+    }
+}
+```
+
+### 6.4 isHeldByCurrentThread 체크
+
+```java
+// 다른 스레드가 획득한 락을 해제하면 예외 발생
+if (lock.isHeldByCurrentThread()) {
+    lock.unlock();
+}
+```
+
+### 6.5 락 범위 최소화
+
+```java
+// ✗ 나쁜 예: 불필요하게 넓은 락 범위
+lock.lock();
+try {
+    validateRequest();      // 락 불필요
+    fetchExternalData();    // 락 불필요
+    updateStock();          // 락 필요한 부분
+    sendNotification();     // 락 불필요
+} finally {
+    lock.unlock();
+}
+
+// ✓ 좋은 예: 최소 범위만 락
+validateRequest();
+fetchExternalData();
+
+lock.lock();
+try {
+    updateStock();  // 락 필요한 부분만!
+} finally {
+    lock.unlock();
+}
+
+sendNotification();
+```
+
+---
+
+## 7. 우리 프로젝트 적용
+
+### 재고 서비스에 분산 락 적용
+
+```java
+// service-inventory/src/main/java/com/example/inventory/service/InventoryService.java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class InventoryService {
+
+    private final RedissonClient redissonClient;
+    private final InventoryRepository inventoryRepository;
+
+    private static final String LOCK_PREFIX = "lock:inventory:product:";
+
+    @Transactional
+    public ReservationResponse reserveStock(ReservationRequest request) {
+        String lockKey = LOCK_PREFIX + request.productId();
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            // 락 획득 (최대 5초 대기, 30초 후 자동 해제)
+            if (!lock.tryLock(5, 30, TimeUnit.SECONDS)) {
+                throw new LockAcquisitionException(
+                    "재고 락 획득 실패: productId=" + request.productId()
+                );
+            }
+
+            log.info("락 획득 성공: {}", lockKey);
+
+            // 재고 확인 및 차감
+            Inventory inventory = inventoryRepository
+                .findByProductId(request.productId())
+                .orElseThrow(() -> new ProductNotFoundException(request.productId()));
+
+            if (inventory.getQuantity() < request.quantity()) {
+                throw new InsufficientStockException(
+                    request.productId(),
+                    inventory.getQuantity(),
+                    request.quantity()
+                );
+            }
+
+            inventory.decrease(request.quantity());
+            inventoryRepository.save(inventory);
+
+            // 예약 기록 생성
+            Reservation reservation = Reservation.create(
+                request.orderId(),
+                request.productId(),
+                request.quantity()
+            );
+            reservationRepository.save(reservation);
+
+            log.info("재고 예약 완료: {}", reservation.getId());
+
+            return ReservationResponse.from(reservation);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LockAcquisitionException("락 획득 중 인터럽트 발생");
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+                log.info("락 해제: {}", lockKey);
+            }
+        }
+    }
+}
+```
+
+---
+
+## 8. 테스트
+
+### 동시성 테스트
+
+```java
+@SpringBootTest
+class InventoryServiceConcurrencyTest {
+
+    @Autowired
+    private InventoryService inventoryService;
+
+    @Autowired
+    private InventoryRepository inventoryRepository;
+
+    @Test
+    void 동시에_100개_요청해도_재고가_정확히_차감된다() throws InterruptedException {
+        // given
+        Long productId = 1L;
+        int initialStock = 100;
+        int threadCount = 100;
+
+        inventoryRepository.save(new Inventory(productId, initialStock));
+
+        ExecutorService executor = Executors.newFixedThreadPool(32);
+        CountDownLatch latch = new CountDownLatch(threadCount);
+
+        // when
+        for (int i = 0; i < threadCount; i++) {
+            executor.submit(() -> {
+                try {
+                    inventoryService.reserveStock(
+                        new ReservationRequest("order-" + UUID.randomUUID(), productId, 1)
+                    );
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        latch.await();
+        executor.shutdown();
+
+        // then
+        Inventory result = inventoryRepository.findByProductId(productId).orElseThrow();
+        assertThat(result.getQuantity()).isEqualTo(0);  // 100 - 100 = 0
+    }
+}
+```
+
+---
+
+## 9. 실습 과제
+
+1. Redisson 의존성 추가
+2. 재고 서비스에 분산 락 적용
+3. 동시 요청 테스트 작성
+4. 락 획득 실패 시나리오 테스트
+5. 락 타임아웃 시나리오 테스트
+
+---
+
+## 참고 자료
+
+- [Redisson 공식 문서](https://github.com/redisson/redisson/wiki)
+- [Redisson Lock 가이드](https://github.com/redisson/redisson/wiki/8.-distributed-locks-and-synchronizers)
+- [Martin Kleppmann - Distributed Locks](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)
+
+---
+
+## 다음 단계
+
+[04-optimistic-lock.md](./04-optimistic-lock.md) - 낙관적 락으로 이동
