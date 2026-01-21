@@ -6,6 +6,7 @@
 - Profile별 설정 파일 작성 방법
 - Profile 활성화 방법
 - 실무에서의 활용 패턴
+- 환경변수 주입 방법 (실행 환경별 전략)
 
 ---
 
@@ -399,9 +400,226 @@ docker run -e DB_PASSWORD=mySecretPassword123 myapp
 
 ---
 
-## 7. 실무 패턴
+## 7. 환경변수 주입 방법 (실행 환경별)
 
-### 7.1 로컬/개발/운영 3단계 구조
+### 7.1 .env 파일이란?
+
+`.env` 파일은 환경변수를 키=값 형태로 저장하는 파일입니다.
+
+```bash
+# .env
+DB_URL=jdbc:mysql://localhost:3306/orderdb
+DB_USERNAME=root
+DB_PASSWORD=local123
+REDIS_HOST=localhost
+```
+
+> ⚠️ **주의**: Spring Boot는 기본적으로 `.env` 파일을 읽지 않습니다. Docker Compose나 별도 라이브러리가 필요합니다.
+
+---
+
+### 7.2 실행 환경별 권장 방법
+
+| 환경 | 권장 방법 | 이유 |
+|------|----------|------|
+| **로컬 개발** | .env + Docker Compose | 간편, 팀 공유 쉬움 |
+| **CI/CD** | GitHub Secrets, GitLab Variables | 보안, 자동화 |
+| **Kubernetes** | ConfigMap, Secret | 클러스터 네이티브 |
+| **AWS** | Parameter Store, Secrets Manager | 관리형 서비스 |
+| **VM/서버** | 시스템 환경변수, systemd | OS 레벨 관리 |
+
+---
+
+### 7.3 로컬 개발: .env + Docker Compose (가장 일반적)
+
+**프로젝트 구조**
+```
+project/
+├── .env                 ← Git 제외 (민감 정보)
+├── .env.example         ← Git 포함 (템플릿)
+├── docker-compose.yml
+└── src/main/resources/
+    └── application.yml
+```
+
+**.env.example (Git에 포함 - 템플릿)**
+```bash
+# 복사해서 .env 만들고 값 채우세요
+DB_URL=jdbc:mysql://localhost:3306/orderdb
+DB_USERNAME=
+DB_PASSWORD=
+REDIS_HOST=localhost
+```
+
+**.env (Git 제외 - 실제 값)**
+```bash
+DB_URL=jdbc:mysql://localhost:3306/orderdb
+DB_USERNAME=root
+DB_PASSWORD=secret123
+REDIS_HOST=localhost
+```
+
+**.gitignore**
+```gitignore
+.env
+!.env.example
+```
+
+**docker-compose.yml**
+```yaml
+version: '3.8'
+services:
+  app:
+    build: .
+    env_file:
+      - .env                    # .env 파일 자동 로드
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+```
+
+**application.yml**
+```yaml
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+```
+
+---
+
+### 7.4 CI/CD: GitHub Actions 예시
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build & Test
+        env:
+          DB_URL: ${{ secrets.DB_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: ./gradlew build
+```
+
+---
+
+### 7.5 Kubernetes: ConfigMap + Secret
+
+**ConfigMap (민감하지 않은 설정)**
+```yaml
+# configmap.yml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+  SERVER_PORT: "8080"
+```
+
+**Secret (민감한 정보)**
+```yaml
+# secret.yml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+type: Opaque
+stringData:
+  DB_USERNAME: "admin"
+  DB_PASSWORD: "super-secret-password"
+```
+
+**Deployment에서 사용**
+```yaml
+# deployment.yml
+spec:
+  containers:
+    - name: app
+      envFrom:
+        - configMapRef:
+            name: app-config
+        - secretRef:
+            name: app-secrets
+```
+
+---
+
+### 7.6 Spring Boot에서 .env 직접 로드하기 (선택적)
+
+Docker 없이 로컬에서 .env를 사용하고 싶다면:
+
+**의존성 추가**
+```groovy
+// build.gradle
+implementation 'me.paulschwarz:spring-dotenv:4.0.0'
+```
+
+**사용**
+```yaml
+# application.yml
+spring:
+  datasource:
+    url: ${DB_URL}
+    password: ${DB_PASSWORD}
+```
+
+> 일반적으로는 Docker Compose를 사용하는 것이 더 권장됩니다.
+
+---
+
+### 7.7 환경별 설정 전략 요약
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     환경별 설정 전략                          │
+│                                                              │
+│  로컬 개발                                                   │
+│  ├── .env 파일 사용 (Docker Compose)                        │
+│  ├── .env.example 템플릿 Git에 포함                         │
+│  └── application-local.yml에 기본값                         │
+│                                                              │
+│  개발/스테이징 서버                                          │
+│  ├── CI/CD 변수 (GitHub Secrets 등)                         │
+│  └── 또는 AWS Parameter Store                               │
+│                                                              │
+│  운영 서버                                                   │
+│  ├── Kubernetes Secret                                      │
+│  ├── AWS Secrets Manager                                    │
+│  ├── HashiCorp Vault                                        │
+│  └── 절대 .env 파일 사용 안 함!                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**정리**
+```
+.env 사용 OK:
+├── 로컬 개발 (Docker Compose와 함께)
+├── 테스트 환경
+└── 간단한 데모/POC
+
+.env 사용 금지:
+├── 운영 환경 (보안 위험)
+├── Kubernetes 환경 (Secret 사용)
+└── 클라우드 환경 (관리형 서비스 사용)
+```
+
+---
+
+## 8. 실무 패턴
+
+### 8.1 로컬/개발/운영 3단계 구조
 
 ```
 application.yml          ← 공통 (변경 적음)
@@ -410,7 +628,7 @@ application-dev.yml      ← 개발 서버 (팀 공유)
 application-prod.yml     ← 운영 서버 (민감 정보는 환경 변수)
 ```
 
-### 7.2 테스트 Profile
+### 8.2 테스트 Profile
 
 ```yaml
 # application-test.yml
@@ -436,7 +654,7 @@ class OrderServiceTest {
 }
 ```
 
-### 7.3 설정 분리 전략
+### 8.3 설정 분리 전략
 
 ```
 [방법 1] 환경별 파일 분리
@@ -458,7 +676,7 @@ spring:
 
 ---
 
-## 8. 우리 프로젝트 적용
+## 9. 우리 프로젝트 적용
 
 ### 서비스별 설정 구조
 
@@ -527,9 +745,9 @@ spring:
 
 ---
 
-## 9. 디버깅 및 확인
+## 10. 디버깅 및 확인
 
-### 9.1 활성화된 Profile 확인
+### 10.1 활성화된 Profile 확인
 
 ```java
 @Component
@@ -546,14 +764,14 @@ public class ProfileChecker implements CommandLineRunner {
 }
 ```
 
-### 9.2 로그로 확인
+### 10.2 로그로 확인
 
 애플리케이션 시작 시 로그에 표시됨:
 ```
 The following profiles are active: local
 ```
 
-### 9.3 Actuator로 확인
+### 10.3 Actuator로 확인
 
 ```yaml
 # application.yml
@@ -570,9 +788,9 @@ curl http://localhost:8080/actuator/env
 
 ---
 
-## 10. 주의사항
+## 11. 주의사항
 
-### 10.1 .gitignore 설정
+### 11.1 .gitignore 설정
 
 ```gitignore
 # 로컬 설정은 커밋하지 않음 (개인별로 다를 수 있음)
@@ -582,7 +800,7 @@ application-local.yml
 application-local-*.yml
 ```
 
-### 10.2 운영 설정 보안
+### 11.2 운영 설정 보안
 
 ```yaml
 # ❌ 운영 비밀번호를 Git에 커밋하지 마세요!
@@ -592,7 +810,7 @@ spring:
     password: ${DB_PASSWORD}  # 환경 변수로만!
 ```
 
-### 10.3 Profile 기본값 설정
+### 11.3 Profile 기본값 설정
 
 ```yaml
 # application.yml
@@ -603,7 +821,7 @@ spring:
 
 ---
 
-## 11. 실습 과제
+## 12. 실습 과제
 
 1. `application.yml`에 공통 설정 작성
 2. `application-local.yml`에 로컬 DB 설정 작성
