@@ -64,11 +64,14 @@
 
 ### 2.1 의존성 추가
 
+> ⚠️ **버전 참고**: 최신 버전은 [TECH-STACK.md](../../architecture/TECH-STACK.md) 참조
+> - Temporal SDK: 1.32.1 (2026년 1월 기준)
+
 ```groovy
 // build.gradle (orchestrator-temporal 모듈)
 dependencies {
     // Temporal Java SDK
-    implementation 'io.temporal:temporal-sdk:1.22.3'
+    implementation 'io.temporal:temporal-sdk:1.32.1'
 
     // Spring Boot
     implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -78,12 +81,25 @@ dependencies {
     implementation project(':common')
 
     // 테스트
-    testImplementation 'io.temporal:temporal-testing:1.22.3'
+    testImplementation 'io.temporal:temporal-testing:1.32.1'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 ```
 
-### 2.2 Temporal 서버 설정 (Docker Compose)
+### 2.2 Temporal 서버 설정
+
+> ⚠️ **주의**: `temporalio/auto-setup` 이미지는 **Deprecated** 되었습니다.
+
+#### 방법 1: Temporal CLI (개발 환경 권장)
+
+```bash
+# 가장 간단한 방법 - SQLite 내장
+docker run --rm -p 7233:7233 -p 8233:8233 \
+  temporalio/temporal:latest \
+  server start-dev --ip 0.0.0.0
+```
+
+#### 방법 2: Docker Compose (외부 DB 사용)
 
 ```yaml
 # docker-compose.yml
@@ -93,9 +109,9 @@ services:
     image: mysql:8.0
     # ...
 
-  # Temporal 서버 추가
+  # Temporal 서버
   temporal:
-    image: temporalio/auto-setup:1.22.3
+    image: temporalio/server:latest
     container_name: temporal
     ports:
       - "7233:7233"
@@ -105,15 +121,12 @@ services:
       - MYSQL_USER=temporal
       - MYSQL_PWD=temporal
       - MYSQL_SEEDS=mysql
-      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development.yaml
     depends_on:
       - mysql
-    volumes:
-      - ./temporal-config:/etc/temporal/config/dynamicconfig
 
   # Temporal Web UI
   temporal-ui:
-    image: temporalio/ui:2.21.3
+    image: temporalio/ui:latest
     container_name: temporal-ui
     ports:
       - "8088:8080"
@@ -125,15 +138,17 @@ services:
 
   # Temporal Admin Tools (선택)
   temporal-admin-tools:
-    image: temporalio/admin-tools:1.22.3
+    image: temporalio/admin-tools:latest
     container_name: temporal-admin-tools
     stdin_open: true
     tty: true
     environment:
-      - TEMPORAL_CLI_ADDRESS=temporal:7233
+      - TEMPORAL_ADDRESS=temporal:7233
     depends_on:
       - temporal
 ```
+
+> **참고**: 프로덕션 환경은 [Temporal Deployment Guide](https://docs.temporal.io/self-hosted-guide/deployment) 참조
 
 ### 2.3 application.yml 설정
 
@@ -1261,9 +1276,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class OrderWorkflowIntegrationTest {
 
+    // Temporal CLI로 dev server 실행 (권장)
     @Container
-    static GenericContainer<?> temporal = new GenericContainer<>("temporalio/auto-setup:1.22.3")
-        .withExposedPorts(7233);
+    static GenericContainer<?> temporal = new GenericContainer<>("temporalio/temporal:latest")
+        .withExposedPorts(7233)
+        .withCommand("server", "start-dev", "--ip", "0.0.0.0");
 
     @DynamicPropertySource
     static void temporalProperties(DynamicPropertyRegistry registry) {

@@ -1,5 +1,15 @@
 # 알람 - Alertmanager
 
+> **버전 참고** (2026년 1월 기준)
+>
+> | 컴포넌트 | 권장 버전 |
+> |----------|-----------|
+> | Alertmanager | v0.28.x |
+> | Prometheus | v3.9.x |
+> | Grafana | 12.3.x |
+>
+> 최신 버전은 [TECH-STACK.md](../../architecture/TECH-STACK.md) 참조
+
 ## 이 문서에서 배우는 것
 
 - 모니터링 알람의 필요성과 원리

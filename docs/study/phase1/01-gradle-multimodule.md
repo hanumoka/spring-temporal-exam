@@ -233,7 +233,7 @@ lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
 
 # Redis
 spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
-redisson = { module = "org.redisson:redisson-spring-boot-starter", version = "3.27.0" }
+redisson = { module = "org.redisson:redisson-spring-boot-starter", version = "4.0.0" }  # Spring Boot 4 호환
 
 # Resilience4j
 resilience4j-spring-boot = { module = "io.github.resilience4j:resilience4j-spring-boot3", version = "2.2.0" }

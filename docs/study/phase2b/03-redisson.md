@@ -132,7 +132,7 @@
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'org.redisson:redisson-spring-boot-starter:3.27.0'
+    implementation 'org.redisson:redisson-spring-boot-starter:4.0.0'  // Spring Boot 4 호환
 }
 ```
 

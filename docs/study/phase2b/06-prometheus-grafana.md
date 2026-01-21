@@ -1,5 +1,15 @@
 # 메트릭 모니터링 - Prometheus와 Grafana
 
+> **버전 참고** (2026년 1월 기준)
+>
+> | 컴포넌트 | 권장 버전 |
+> |----------|-----------|
+> | Prometheus | v3.9.x |
+> | Grafana | 12.3.x |
+>
+> 이 문서의 Docker 이미지 버전은 학습 목적으로 작성되었습니다.
+> 최신 버전은 [TECH-STACK.md](../../architecture/TECH-STACK.md) 참조
+
 ## 이 문서에서 배우는 것
 
 - 메트릭(Metrics)의 개념과 종류

@@ -898,13 +898,32 @@ WorkflowClient.start(workflow::processOrder, request);
 
 ### 과제 1: Temporal 로컬 실행
 
-Docker Compose로 Temporal Server를 로컬에 실행해봅니다.
+> ⚠️ **주의**: `temporalio/auto-setup` 이미지는 **Deprecated** 되었습니다.
+> 개발 환경에서는 Temporal CLI 또는 `temporalio/temporal` 이미지를 사용하세요.
+
+#### 방법 1: Temporal CLI (권장 - 가장 간단)
+
+```bash
+# Temporal CLI 설치 후
+temporal server start-dev
+
+# 또는 Docker로 실행
+docker run --rm -p 7233:7233 -p 8233:8233 \
+  temporalio/temporal:latest \
+  server start-dev --ip 0.0.0.0
+```
+
+- 포트 7233: gRPC (Worker 연결)
+- 포트 8233: Web UI
+- SQLite 내장 (별도 DB 불필요)
+
+#### 방법 2: Docker Compose (외부 DB 필요 시)
 
 ```yaml
 # docker-compose-temporal.yml
 services:
   temporal:
-    image: temporalio/auto-setup:1.22.0
+    image: temporalio/server:latest
     ports:
       - "7233:7233"
     environment:
@@ -925,7 +944,7 @@ services:
       POSTGRES_PASSWORD: temporal
 
   temporal-ui:
-    image: temporalio/ui:2.21.0
+    image: temporalio/ui:latest
     ports:
       - "8080:8080"
     environment:
@@ -935,6 +954,8 @@ services:
 ```bash
 docker-compose -f docker-compose-temporal.yml up -d
 ```
+
+> **참고**: 프로덕션 환경 설정은 [Temporal Deployment Guide](https://docs.temporal.io/self-hosted-guide/deployment) 참조
 
 ### 과제 2: Temporal Web UI 탐색
 

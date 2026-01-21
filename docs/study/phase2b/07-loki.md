@@ -1,10 +1,21 @@
 # 로그 수집 - Loki
 
+> ⚠️ **중요 공지: Promtail EOL (End-of-Life)**
+>
+> Promtail은 **2026년 3월 2일**에 End-of-Life 예정입니다.
+> Grafana Alloy로 마이그레이션을 권장합니다.
+>
+> 이 문서에서는 학습 목적으로 Promtail을 설명하지만,
+> 신규 프로젝트에서는 [Grafana Alloy](#grafana-alloy-권장-대안)를 사용하세요.
+>
+> **참조**: [Promtail to Alloy Migration](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/)
+
 ## 이 문서에서 배우는 것
 
 - 중앙 집중식 로깅의 필요성
 - Loki의 아키텍처와 특징
-- Promtail을 통한 로그 수집
+- Promtail을 통한 로그 수집 (레거시)
+- **Grafana Alloy를 통한 로그 수집 (권장)**
 - Spring Boot 로그 설정
 - Grafana에서 로그 조회
 - 로그와 메트릭/트레이스 연동
@@ -723,10 +734,116 @@ log.info("Payment processed for card {}", masker.maskCreditCard(cardNumber));
 
 ---
 
+## 10. Grafana Alloy (권장 대안)
+
+> ⚠️ **Promtail EOL**: 2026년 3월 2일부터 Promtail은 더 이상 업데이트되지 않습니다.
+> 신규 프로젝트에서는 Grafana Alloy를 사용하세요.
+
+### Grafana Alloy란?
+
+Grafana Alloy는 **OpenTelemetry Collector의 Grafana Labs 배포판**입니다.
+로그, 메트릭, 트레이스를 단일 에이전트로 수집합니다.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Promtail vs Grafana Alloy                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Promtail (EOL)                    Grafana Alloy                   │
+│   ─────────────────                 ─────────────────               │
+│   • 로그만 수집                      • 로그 + 메트릭 + 트레이스       │
+│   • Loki 전용                        • OTEL 표준 지원               │
+│   • 2026년 3월 EOL                   • 적극적 개발 중               │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Docker Compose 설정 (Alloy)
+
+```yaml
+# docker-compose.yml
+services:
+  loki:
+    image: grafana/loki:3.6.0
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+    command: -config.file=/etc/loki/local-config.yaml
+
+  alloy:
+    image: grafana/alloy:latest
+    ports:
+      - "12345:12345"  # Alloy UI
+    volumes:
+      - ./alloy-config.alloy:/etc/alloy/config.alloy
+      - /var/log:/var/log:ro
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    ports:
+      - "3000:3000"
+```
+
+### Alloy 설정 파일
+
+```hcl
+// alloy-config.alloy
+
+// 로그 소스 정의
+local.file_match "spring_logs" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/spring-app/*.log",
+    job         = "spring-app",
+  }]
+}
+
+// 로그 수집
+loki.source.file "spring" {
+  targets    = local.file_match.spring_logs.targets
+  forward_to = [loki.write.default.receiver]
+}
+
+// Loki로 전송
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+```
+
+### Promtail → Alloy 설정 변환
+
+```bash
+# 자동 변환 도구 사용
+alloy convert --source-format=promtail \
+  --output=alloy-config.alloy \
+  promtail-config.yml
+```
+
+### 마이그레이션 체크리스트
+
+```
+[ ] Grafana Alloy 설치
+[ ] 기존 Promtail 설정 변환
+[ ] 변환된 설정 검증
+[ ] Alloy로 로그 수집 테스트
+[ ] 기존 Promtail 중지
+[ ] 메트릭 이름 변경 확인 (대시보드/알림)
+```
+
+---
+
 ## 참고 자료
 
 - [Grafana Loki 공식 문서](https://grafana.com/docs/loki/)
-- [Promtail 설정](https://grafana.com/docs/loki/latest/clients/promtail/)
+- [Grafana Alloy 문서](https://grafana.com/docs/alloy/)
+- [Promtail → Alloy 마이그레이션](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/)
 - [LogQL 문서](https://grafana.com/docs/loki/latest/logql/)
 - [Logstash Logback Encoder](https://github.com/logfellow/logstash-logback-encoder)
 - [Spring Boot 로깅](https://docs.spring.io/spring-boot/reference/features/logging.html)

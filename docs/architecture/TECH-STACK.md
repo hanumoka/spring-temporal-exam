@@ -1,5 +1,8 @@
 # 기술 스택 검증
 
+> **마지막 검토**: 2026년 1월 21일
+> **검토 결과**: [REVIEW-2026-01.md](../REVIEW-2026-01.md) 참조
+
 ## 검증 완료 항목
 
 | 항목 | 상태 | 검증 내용 |
@@ -7,17 +10,60 @@
 | Spring Boot 4.0.1 | ✅ | 2025년 12월 18일 출시, Spring Framework 7 기반 |
 | Java 21 | ✅ | Spring Boot 4는 Java 17~25 지원 |
 | `spring-boot-starter-webmvc` | ✅ | Spring Boot 4에서 `web` → `webmvc`로 변경됨 |
-| Temporal Spring Boot Integration | ✅ | 2025년 12월 16일 GA 출시 |
+| Temporal Spring Boot Integration | ⚠️ | GA 출시됨, Spring Boot 4 호환성 확인 필요 |
+
+## 권장 버전 (2026년 1월 기준)
+
+| 컴포넌트 | 권장 버전 | 비고 |
+|----------|-----------|------|
+| **Spring Boot** | 4.0.1 | Spring Framework 7 기반 |
+| **Temporal SDK** | 1.32.1 | [Releases](https://github.com/temporalio/sdk-java/releases) |
+| **Redisson** | 4.0.0 | Spring Boot 4 호환 |
+| **Grafana** | 12.3.x | [Download](https://grafana.com/grafana/download) |
+| **Loki** | 3.6.x | [Release Notes](https://grafana.com/docs/loki/latest/release-notes/) |
+| **Prometheus** | 3.9.x | [Download](https://prometheus.io/download/) |
+| **Grafana Alloy** | latest | Promtail 대체 |
 
 ## 참고 링크
 
 - [Spring Boot 4.0.1 릴리즈](https://spring.io/blog/2025/12/18/spring-boot-4-0-1-available-now/)
 - [Spring Boot 4.0 마이그레이션 가이드](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide)
-- [Temporal Spring Boot Integration GA](https://community.temporal.io/t/spring-boot-integration-is-now-in-ga/18770)
+- [Temporal Java SDK](https://github.com/temporalio/sdk-java)
+- [Redisson 4.0.0 Release](https://github.com/redisson/redisson/releases)
 
-## 주의 사항
+---
 
-### Temporal + Spring Boot 4 호환성
+## 주요 경고 사항
+
+### ⚠️ Temporal Docker 이미지 변경
+
+`temporalio/auto-setup` 이미지는 **Deprecated** 되었습니다.
+
+**개발 환경 권장 설정**:
+```bash
+# Temporal CLI 사용 (SQLite 내장, 가장 간단)
+temporal server start-dev
+
+# Docker로 실행
+docker run --rm -p 7233:7233 -p 8233:8233 \
+  temporalio/temporal:latest \
+  server start-dev --ip 0.0.0.0
+```
+
+**프로덕션 환경**: [Temporal Deployment Guide](https://docs.temporal.io/self-hosted-guide/deployment) 참조
+
+### ⚠️ Promtail EOL (2026년 3월 2일)
+
+Promtail은 **End-of-Life** 예정입니다. Grafana Alloy로 마이그레이션하세요.
+
+```bash
+# Promtail → Alloy 설정 변환
+alloy convert --source-format=promtail --output=alloy-config.alloy promtail-config.yml
+```
+
+**참조**: [Promtail to Alloy Migration](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/)
+
+### ⚠️ Temporal + Spring Boot 4 호환성
 
 - Temporal Spring Boot Starter는 **Spring Boot 3.x** 기준으로 문서화됨
 - Spring Boot 4.0과의 호환성이 공식적으로 명시되지 않음
