@@ -505,9 +505,360 @@ public class InventoryService {
 
 ---
 
-## 8. 테스트
+## 8. 타임아웃 이슈 및 대응 전략
 
-### 동시성 테스트
+### 8.1 타임아웃 레이어 구조
+
+분산 락 사용 시 여러 레이어의 타임아웃이 관련됩니다:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    타임아웃 레이어 구조                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [클라이언트]                                                        │
+│       │                                                              │
+│       │ ① HTTP 타임아웃 (예: 30초)                                   │
+│       ▼                                                              │
+│  [API Gateway / Controller]                                          │
+│       │                                                              │
+│       │ ② 분산 락 waitTime (예: 10초)                               │
+│       ▼                                                              │
+│  [Service Layer]                                                     │
+│       │                                                              │
+│       │ ③ 분산 락 leaseTime (예: 30초)                              │
+│       │ ④ DB 트랜잭션 타임아웃 (예: 30초)                           │
+│       ▼                                                              │
+│  [Database / Redis]                                                  │
+│                                                                      │
+│  ⚠️ 문제: 이 타임아웃들이 서로 맞지 않으면 다양한 이슈 발생!         │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Case 1: 분산 락 획득 실패 (waitTime 초과)
+
+**상황**: 다른 서버가 락을 오래 잡고 있어서 waitTime 내에 획득 불가
+
+```
+서버 A: 락 획득 (30초간 작업 중...)
+서버 B: 락 획득 시도 → 10초 대기 → 실패!
+```
+
+**대응: 재시도 로직 구현**
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class InventoryService {
+
+    private final RedissonClient redissonClient;
+
+    private static final int MAX_RETRY = 3;
+    private static final long RETRY_DELAY_MS = 500;
+
+    public ReservationResponse reserveStockWithRetry(ReservationRequest request) {
+        String lockKey = "lock:inventory:product:" + request.productId();
+        RLock lock = redissonClient.getLock(lockKey);
+
+        int retryCount = 0;
+
+        while (retryCount < MAX_RETRY) {
+            try {
+                if (lock.tryLock(5, 30, TimeUnit.SECONDS)) {
+                    try {
+                        return doReserveStock(request);
+                    } finally {
+                        if (lock.isHeldByCurrentThread()) {
+                            lock.unlock();
+                        }
+                    }
+                }
+
+                retryCount++;
+                log.warn("락 획득 실패, 재시도 {}/{}: {}", retryCount, MAX_RETRY, lockKey);
+
+                if (retryCount < MAX_RETRY) {
+                    Thread.sleep(RETRY_DELAY_MS * retryCount);  // 점진적 대기
+                }
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new ServiceException("락 획득 중 인터럽트");
+            }
+        }
+
+        throw new LockAcquisitionException(
+            "락 획득 실패 (재시도 " + MAX_RETRY + "회 초과): " + lockKey
+        );
+    }
+}
+```
+
+**클라이언트 응답 처리:**
+
+```java
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(LockAcquisitionException.class)
+    public ResponseEntity<ErrorResponse> handleLockFailure(LockAcquisitionException e) {
+        return ResponseEntity
+            .status(HttpStatus.SERVICE_UNAVAILABLE)  // 503
+            .header("Retry-After", "5")  // 5초 후 재시도 권장
+            .body(new ErrorResponse(
+                "LOCK_ACQUISITION_FAILED",
+                "현재 요청이 많습니다. 잠시 후 다시 시도해주세요."
+            ));
+    }
+}
+```
+
+### 8.3 Case 2: 락 보유 중 HTTP 타임아웃
+
+**상황**: 락 획득 후 작업 중 클라이언트가 HTTP 타임아웃으로 연결 종료
+
+```
+시간   서버                      클라이언트
+0초    락 획득                   요청 전송
+30초   작업 중...                ⚠️ HTTP 타임아웃! 연결 끊김
+40초   작업 완료, 응답 전송 시도  (이미 연결 없음)
+
+결과: 서버는 정상 처리했지만 클라이언트는 실패로 인식
+      → 클라이언트가 재시도하면 중복 처리 위험!
+```
+
+**대응: 멱등성 키 사용**
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class InventoryController {
+
+    private final InventoryService inventoryService;
+    private final IdempotencyService idempotencyService;
+
+    @PostMapping("/reservations")
+    public ResponseEntity<ReservationResponse> reserve(
+            @RequestHeader("X-Idempotency-Key") String idempotencyKey,
+            @RequestBody ReservationRequest request) {
+
+        // 1. 이미 처리된 요청인지 확인
+        Optional<ReservationResponse> cached = idempotencyService.get(idempotencyKey);
+        if (cached.isPresent()) {
+            log.info("중복 요청 감지, 캐시된 결과 반환: {}", idempotencyKey);
+            return ResponseEntity.ok(cached.get());
+        }
+
+        // 2. 새 요청 처리
+        ReservationResponse response = inventoryService.reserveStock(request);
+
+        // 3. 결과 캐시 (TTL: 24시간)
+        idempotencyService.save(idempotencyKey, response, Duration.ofHours(24));
+
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+### 8.4 Case 3: 락 보유 중 leaseTime 만료
+
+**상황**: 작업이 예상보다 오래 걸려 leaseTime 만료
+
+```
+시간   서버 A                    서버 B
+0초    락 획득 (leaseTime=30초)
+30초   ⚠️ leaseTime 만료!        락 획득!
+35초   DB 저장!                  DB 저장!
+
+결과: 두 서버가 동시에 같은 데이터 수정! (정합성 깨짐)
+```
+
+**대응 1: Watchdog (락 자동 갱신)**
+
+```java
+public ReservationResponse reserveStock(ReservationRequest request) {
+    String lockKey = "lock:inventory:product:" + request.productId();
+    RLock lock = redissonClient.getLock(lockKey);
+
+    try {
+        // ⚠️ leaseTime을 -1로 설정하면 Watchdog 활성화
+        // Watchdog: 락 보유 중 자동으로 leaseTime 갱신 (30초마다)
+        if (!lock.tryLock(10, -1, TimeUnit.SECONDS)) {
+            throw new LockAcquisitionException("락 획득 실패");
+        }
+
+        log.info("락 획득 (Watchdog 활성화): {}", lockKey);
+        return doReserveStock(request);
+
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new ServiceException("락 획득 중 인터럽트");
+    } finally {
+        if (lock.isHeldByCurrentThread()) {
+            lock.unlock();
+        }
+    }
+}
+```
+
+**대응 2: 작업 전 락 유효성 검증**
+
+```java
+public ReservationResponse reserveStock(ReservationRequest request) {
+    RFencedLock lock = redissonClient.getFencedLock(lockKey);
+
+    try {
+        Long fenceToken = lock.tryLockAndGetToken(10, 30, TimeUnit.SECONDS);
+        if (fenceToken == null) {
+            throw new LockAcquisitionException("락 획득 실패");
+        }
+
+        // 비즈니스 로직 수행
+        Inventory inventory = inventoryRepository.findByProductId(request.productId())
+            .orElseThrow();
+
+        // 저장 전 락 유효성 검증
+        if (!lock.isHeldByCurrentThread()) {
+            throw new LockExpiredException("락이 만료되었습니다. 작업을 중단합니다.");
+        }
+
+        inventory.decrease(request.quantity());
+        inventoryRepository.save(inventory);
+
+        return ReservationResponse.success();
+
+    } finally {
+        if (lock.isHeldByCurrentThread()) {
+            lock.unlock();
+        }
+    }
+}
+```
+
+### 8.5 Case 4: DB 트랜잭션 타임아웃
+
+**상황**: 락 보유 중 DB 트랜잭션 타임아웃으로 롤백
+
+**대응: 타임아웃 계층 설정**
+
+```java
+@Service
+@RequiredArgsConstructor
+public class InventoryService {
+
+    // 타임아웃 계층: HTTP > (waitTime + leaseTime) > Transaction
+    private static final long LOCK_WAIT_SECONDS = 5;
+    private static final long LOCK_LEASE_SECONDS = 25;
+    private static final int TX_TIMEOUT_SECONDS = 20;
+
+    @Transactional(timeout = TX_TIMEOUT_SECONDS)
+    public ReservationResponse reserveStock(ReservationRequest request) {
+        String lockKey = "lock:inventory:product:" + request.productId();
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            if (!lock.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS)) {
+                throw new LockAcquisitionException("락 획득 실패");
+            }
+
+            return doReserveStock(request);
+
+        } catch (TransactionTimedOutException e) {
+            log.error("트랜잭션 타임아웃: {}", e.getMessage());
+            throw new ServiceException("요청 처리 시간 초과. 다시 시도해주세요.");
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+}
+```
+
+### 8.6 타임아웃 설정 권장 가이드
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    타임아웃 설정 권장값                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  권장 순서: HTTP > (waitTime + leaseTime) > Transaction              │
+│                                                                      │
+│  예시 1: 일반 API                                                    │
+│  ├── HTTP 타임아웃:        30초                                      │
+│  ├── 락 waitTime:          5초                                       │
+│  ├── 락 leaseTime:         20초                                      │
+│  └── 트랜잭션 타임아웃:    15초                                      │
+│                                                                      │
+│  예시 2: 빠른 응답 필요                                              │
+│  ├── HTTP 타임아웃:        10초                                      │
+│  ├── 락 waitTime:          2초                                       │
+│  ├── 락 leaseTime:         7초                                       │
+│  └── 트랜잭션 타임아웃:    5초                                       │
+│                                                                      │
+│  예시 3: 오래 걸리는 작업                                            │
+│  ├── HTTP 타임아웃:        120초 (또는 비동기 처리)                  │
+│  ├── 락 waitTime:          10초                                      │
+│  ├── 락 leaseTime:         -1 (Watchdog 사용)                        │
+│  └── 트랜잭션 타임아웃:    90초                                      │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**application.yml 설정 예시:**
+
+```yaml
+app:
+  lock:
+    wait-time: 5s
+    lease-time: 20s
+
+spring:
+  transaction:
+    default-timeout: 15s
+
+server:
+  servlet:
+    connection-timeout: 30s
+```
+
+### 8.7 타임아웃 대응 체크리스트
+
+```
+□ 타임아웃 계층 설정
+  └── HTTP > Lock(wait+lease) > Transaction
+
+□ 락 획득 실패 처리
+  ├── 적절한 재시도 로직 (지수 백오프)
+  ├── 503 + Retry-After 헤더 응답
+  └── 모니터링/알람 설정
+
+□ 멱등성 보장
+  ├── X-Idempotency-Key 헤더 사용
+  └── 결과 캐싱 (Redis)
+
+□ 락 만료 대응
+  ├── Watchdog 사용 (leaseTime = -1)
+  ├── 또는 충분한 leaseTime 설정
+  └── 작업 전 락 유효성 검증
+
+□ 트랜잭션 타임아웃 처리
+  ├── @Transactional(timeout=N)
+  └── 명확한 에러 메시지 반환
+
+□ 모니터링
+  ├── 락 획득 성공/실패 메트릭
+  ├── 락 대기 시간 메트릭
+  └── 타임아웃 발생 알람
+```
+
+---
+
+## 9. 테스트
+
+### 9.1 동시성 테스트
 
 ```java
 @SpringBootTest
@@ -556,13 +907,14 @@ class InventoryServiceConcurrencyTest {
 
 ---
 
-## 9. 실습 과제
+## 10. 실습 과제
 
 1. Redisson 의존성 추가
 2. 재고 서비스에 분산 락 적용
 3. 동시 요청 테스트 작성
 4. 락 획득 실패 시나리오 테스트
 5. 락 타임아웃 시나리오 테스트
+6. 타임아웃 계층 설정 및 검증
 
 ---
 
