@@ -14,9 +14,10 @@
 | D008 | Kubernetes | 미사용 (Docker Compose로 대체) |
 | D009 | Service Mesh | 미사용 (학습 범위 외) |
 | D010 | 동시성 제어 | 서비스별 차별화 적용 |
-| D011 | ORM 전략 | JPA + MyBatis 병행 학습 |
+| D011 | ORM 전략 | JPA + MyBatis 전체 서비스 병행 적용 |
 | D012 | 트랜잭션 관리 | TransactionTemplate (프로그래밍 방식) |
 | D013 | Redis 운영 전략 | Pending List 복구 + Phantom Key 대응 |
+| D014 | Spring Boot 버전 전략 | Phase 1~2는 4.x, Phase 3 전 Temporal 호환성 재평가 |
 
 ---
 
@@ -312,7 +313,17 @@ semaphore.trySetPermits(5);  // 최대 5개 동시 발송
 
 ## D011. ORM 전략
 
-**결정**: JPA + MyBatis 병행 학습
+**결정**: JPA + MyBatis 전체 서비스 병행 적용
+
+### 적용 범위
+
+모든 비즈니스 서비스(Order, Inventory, Payment)에 JPA와 MyBatis를 동시에 적용합니다.
+
+| 서비스 | JPA | MyBatis | 학습 포인트 |
+|--------|-----|---------|------------|
+| Order Service | 엔티티 관리 | Saga 상태 추적, 낙관적 락 | WHERE version = ? |
+| Inventory Service | 기본 CRUD | 재고 차감, 분산 락과 연계 | FOR UPDATE 직접 작성 |
+| Payment Service | 결제 정보 관리 | 멱등성 체크, 트랜잭션 로그 | INSERT IGNORE |
 
 ### 배경
 
@@ -376,8 +387,8 @@ semaphore.trySetPermits(5);  // 최대 5개 동시 발송
 |------|------------------|---------------|
 | **Phase 2-A** | | |
 | [01-saga-pattern.md](../study/phase2a/01-saga-pattern.md) | Saga 상태 관리 | `WHERE version = ?`, 동적 컬럼 UPDATE |
-| [04-optimistic-lock.md](../study/phase2a/04-optimistic-lock.md) | 낙관적 락 구현 | `WHERE version = ?`, CAS 패턴 |
-| [05-idempotency.md](../study/phase2a/05-idempotency.md) | 멱등성 보장 | `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE` |
+| [02-idempotency.md](../study/phase2a/02-idempotency.md) | 멱등성 보장 | `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE` |
+| [05-optimistic-lock.md](../study/phase2a/05-optimistic-lock.md) | 낙관적 락 구현 | `WHERE version = ?`, CAS 패턴 |
 | **Phase 2-B** | | |
 | [04-outbox-pattern.md](../study/phase2b/04-outbox-pattern.md) | Outbox 폴링 | `FOR UPDATE SKIP LOCKED`, 배치 삭제 |
 
@@ -548,6 +559,61 @@ public Order createOrder(OrderRequest request) {
 |------|------|
 | [02-redis-stream.md](../study/phase2b/02-redis-stream.md) | Pending List 심화 (섹션 6) |
 | [03-redisson.md](../study/phase2b/03-redisson.md) | Phantom Key와 락 타임아웃 (섹션 8) |
+
+---
+
+## D014. Spring Boot 버전 전략
+
+**결정**: Phase 1~2는 Spring Boot 4.x 유지, Phase 3 진입 전 Temporal 호환성 재평가
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              Temporal + Spring Boot 호환성 현황 (2026-01)            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Spring Boot 4.0.1]                                                 │
+│  ├── 릴리스: 2025년 11월 21일                                        │
+│  ├── 요구사항: Jakarta EE 11, Servlet 6.1                           │
+│  └── javax.* → jakarta.* 완전 전환                                  │
+│                                                                      │
+│  [Temporal Spring Boot Starter]                                      │
+│  ├── 공식 지원: Spring Boot 2.x, 3.x                                │
+│  ├── Spring Boot 4.x: 공식 지원 미확인                              │
+│  └── 최신 버전: 1.32.1 (2024-12)                                    │
+│                                                                      │
+│  [결론]                                                              │
+│  └── Phase 3 시점에 Temporal SDK 업데이트 여부 확인 후 대응         │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 전략
+
+| Phase | Spring Boot | Temporal | 비고 |
+|-------|-------------|----------|------|
+| Phase 1 | 4.0.1 | 미사용 | Jakarta EE 11 학습 |
+| Phase 2-A | 4.0.1 | 미사용 | Saga, 동시성 학습 |
+| Phase 2-B | 4.0.1 | 미사용 | MQ, Observability 학습 |
+| Phase 3 | **재평가** | 사용 | 호환성 확인 후 결정 |
+
+### Phase 3 진입 전 체크리스트
+
+```
+[ ] Temporal SDK 최신 버전 확인
+[ ] Spring Boot 4 공식 지원 여부 확인
+[ ] 미지원 시 대안 검토:
+    ├── A. Spring Boot 3.x 다운그레이드
+    ├── B. Temporal SDK 직접 통합 (Starter 없이)
+    └── C. 호환성 이슈 직접 해결
+[ ] 테스트 프로젝트에서 검증
+```
+
+### 참고 자료
+
+- [Temporal Spring Boot Integration](https://docs.temporal.io/develop/java/spring-boot-integration)
+- [Spring Boot 4.0 Release Notes](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Release-Notes)
 
 ---
 

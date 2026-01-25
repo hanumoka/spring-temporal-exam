@@ -21,20 +21,23 @@
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
-| 항목 | 상태 |
-|------|------|
-| Order 서비스 도메인/API 구현 | 대기 |
-| Inventory 서비스 도메인/API 구현 | 대기 |
-| Payment 서비스 도메인/API 구현 | 대기 |
-| 오케스트레이터 REST 호출 구현 | 대기 |
-| 보상 트랜잭션 구현 | 대기 |
-| 글로벌 예외 처리 | 대기 |
-| Resilience4j 재시도/타임아웃 | 대기 |
-| MDC 로깅 | 대기 |
-| 재고 차감 분산 락 (Redisson) | 대기 |
-| 낙관적 락 (JPA @Version) | 대기 |
-| 멱등성 처리 (Idempotency Key) | 대기 |
-| Bean Validation 입력 검증 | 대기 |
+> **학습 순서 변경**: 멱등성이 재시도의 전제조건이므로 Resilience4j 앞으로 이동
+
+| 항목 | 상태 | 학습 문서 |
+|------|------|----------|
+| Order 서비스 도메인/API 구현 | 대기 | 01-saga-pattern |
+| Inventory 서비스 도메인/API 구현 | 대기 | 01-saga-pattern |
+| Payment 서비스 도메인/API 구현 | 대기 | 01-saga-pattern |
+| 오케스트레이터 REST 호출 구현 | 대기 | 01-saga-pattern |
+| 보상 트랜잭션 구현 | 대기 | 01-saga-pattern |
+| 글로벌 예외 처리 | 대기 | 07-exception-handling |
+| **멱등성 처리 (Idempotency Key)** | 대기 | **02-idempotency** |
+| Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j |
+| 재고 차감 분산 락 (Redisson) | 대기 | 04-distributed-lock |
+| 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
+| Bean Validation 입력 검증 | 대기 | 06-bean-validation |
+| MDC 로깅 | 대기 | 08-mdc-logging |
+| TransactionTemplate 적용 | 대기 | 09-transaction-template |
 
 ## Phase 2-B: MQ + Redis + Observability
 

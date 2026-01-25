@@ -1,24 +1,19 @@
-# 로그 수집 - Loki
+# 로그 수집 - Loki + Grafana Alloy
 
-> ⚠️ **중요 공지: Promtail EOL (End-of-Life)**
+> **이 문서는 Grafana Alloy 중심으로 작성되었습니다.**
 >
-> Promtail은 **2026년 3월 2일**에 End-of-Life 예정입니다.
-> Grafana Alloy로 마이그레이션을 권장합니다.
->
-> 이 문서에서는 학습 목적으로 Promtail을 설명하지만,
-> 신규 프로젝트에서는 [Grafana Alloy](#grafana-alloy-권장-대안)를 사용하세요.
->
-> **참조**: [Promtail to Alloy Migration](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/)
+> Promtail은 **2026년 3월 2일 EOL**로, 신규 프로젝트에서 사용하지 마세요.
+> 레거시 참조가 필요한 경우 [부록: Promtail (레거시)](#부록-promtail-레거시)를 참조하세요.
 
 ## 이 문서에서 배우는 것
 
 - 중앙 집중식 로깅의 필요성
 - Loki의 아키텍처와 특징
-- Promtail을 통한 로그 수집 (레거시)
 - **Grafana Alloy를 통한 로그 수집 (권장)**
 - Spring Boot 로그 설정
 - Grafana에서 로그 조회
 - 로그와 메트릭/트레이스 연동
+- LogQL 쿼리
 
 ---
 
@@ -172,7 +167,7 @@
 
 ---
 
-## 3. Docker Compose 설정
+## 3. Docker Compose 설정 (Grafana Alloy)
 
 ### 전체 스택 설정
 
@@ -182,7 +177,7 @@ version: '3.8'
 
 services:
   loki:
-    image: grafana/loki:2.9.0
+    image: grafana/loki:3.6.0
     container_name: loki
     ports:
       - "3100:3100"
@@ -191,19 +186,24 @@ services:
       - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
 
-  promtail:
-    image: grafana/promtail:2.9.0
-    container_name: promtail
+  alloy:
+    image: grafana/alloy:latest
+    container_name: alloy
+    ports:
+      - "12345:12345"  # Alloy UI
     volumes:
-      - ./promtail/promtail-config.yml:/etc/promtail/config.yml
+      - ./alloy/config.alloy:/etc/alloy/config.alloy
       - /var/log:/var/log:ro                          # 시스템 로그
       - ./logs:/app/logs:ro                           # 애플리케이션 로그
-    command: -config.file=/etc/promtail/config.yml
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
     depends_on:
       - loki
 
   grafana:
-    image: grafana/grafana:10.2.0
+    image: grafana/grafana:12.3.0
     container_name: grafana
     ports:
       - "3000:3000"
@@ -269,74 +269,120 @@ compactor:
   shared_store: filesystem
 ```
 
-### Promtail 설정 파일
+### Grafana Alloy 설정 파일
 
-```yaml
-# promtail/promtail-config.yml
-server:
-  http_listen_port: 9080
-  grpc_listen_port: 0
+```hcl
+// alloy/config.alloy
 
-positions:
-  filename: /tmp/positions.yaml
+// ============================================
+// 로그 소스 정의 - Spring Boot 애플리케이션
+// ============================================
+local.file_match "spring_logs" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/app/logs/*.log",
+    job         = "spring-boot",
+    env         = "local",
+  }]
+}
 
-clients:
-  - url: http://loki:3100/loki/api/v1/push
+// 로그 수집 및 파싱
+loki.source.file "spring" {
+  targets    = local.file_match.spring_logs.targets
+  forward_to = [loki.process.spring.receiver]
+}
 
-scrape_configs:
-  # Spring Boot 애플리케이션 로그
-  - job_name: spring-boot
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: spring-boot
-          __path__: /app/logs/*.log
+// JSON 로그 파싱 및 레이블 추출
+loki.process "spring" {
+  forward_to = [loki.write.default.receiver]
 
-    pipeline_stages:
-      # 멀티라인 로그 처리 (스택트레이스)
-      - multiline:
-          firstline: '^\d{4}-\d{2}-\d{2}'
-          max_wait_time: 3s
+  // JSON 파싱
+  stage.json {
+    expressions = {
+      level     = "level",
+      logger    = "logger_name",
+      message   = "message",
+      traceId   = "traceId",
+      spanId    = "spanId",
+      timestamp = "@timestamp",
+    }
+  }
 
-      # JSON 로그 파싱
-      - json:
-          expressions:
-            level: level
-            logger: logger
-            message: message
-            traceId: traceId
-            spanId: spanId
-            timestamp: timestamp
+  // 레이블 추가
+  stage.labels {
+    values = {
+      level   = "",
+      traceId = "",
+    }
+  }
 
-      # 레이블 추가
-      - labels:
-          level:
-          logger:
-          traceId:
+  // 타임스탬프 설정
+  stage.timestamp {
+    source = "timestamp"
+    format = "2006-01-02T15:04:05.000Z07:00"
+  }
 
-      # 타임스탬프 설정
-      - timestamp:
-          source: timestamp
-          format: '2006-01-02T15:04:05.000Z07:00'
+  // 멀티라인 처리 (스택트레이스)
+  stage.multiline {
+    firstline     = "^\\d{4}-\\d{2}-\\d{2}|^\\{\"@timestamp\""
+    max_wait_time = "3s"
+  }
+}
 
-  # Docker 컨테이너 로그
-  - job_name: containers
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: containers
-          __path__: /var/lib/docker/containers/*/*.log
+// ============================================
+// 로그 소스 정의 - Docker 컨테이너
+// ============================================
+local.file_match "container_logs" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/lib/docker/containers/*/*.log",
+    job         = "containers",
+  }]
+}
 
-    pipeline_stages:
-      - json:
-          expressions:
-            output: log
-            stream: stream
-            time: time
-      - output:
-          source: output
+loki.source.file "containers" {
+  targets    = local.file_match.container_logs.targets
+  forward_to = [loki.write.default.receiver]
+}
+
+// ============================================
+// Loki로 전송
+// ============================================
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+```
+
+### Alloy 설정 주요 개념
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Grafana Alloy 파이프라인 구조                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   [local.file_match]                                                │
+│   └── 로그 파일 경로 패턴 정의                                       │
+│       → targets에 __path__, job, env 등 레이블 설정                 │
+│                                                                      │
+│   [loki.source.file]                                                │
+│   └── 실제 파일 읽기                                                 │
+│       → file_match의 targets 참조                                   │
+│       → forward_to로 다음 단계 지정                                  │
+│                                                                      │
+│   [loki.process]                                                    │
+│   └── 로그 처리 파이프라인                                           │
+│       → stage.json: JSON 파싱                                       │
+│       → stage.labels: 레이블 추출                                   │
+│       → stage.timestamp: 타임스탬프 설정                            │
+│       → stage.multiline: 멀티라인 처리                              │
+│                                                                      │
+│   [loki.write]                                                      │
+│   └── Loki로 전송                                                    │
+│       → endpoint.url: Loki 주소                                     │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -734,90 +780,12 @@ log.info("Payment processed for card {}", masker.maskCreditCard(cardNumber));
 
 ---
 
-## 10. Grafana Alloy (권장 대안)
+## 10. 부록: Promtail (레거시)
 
-> ⚠️ **Promtail EOL**: 2026년 3월 2일부터 Promtail은 더 이상 업데이트되지 않습니다.
-> 신규 프로젝트에서는 Grafana Alloy를 사용하세요.
+> ⚠️ **Promtail은 2026년 3월 2일 EOL입니다.**
+> 신규 프로젝트에서는 사용하지 마세요. 기존 시스템 마이그레이션 참조용입니다.
 
-### Grafana Alloy란?
-
-Grafana Alloy는 **OpenTelemetry Collector의 Grafana Labs 배포판**입니다.
-로그, 메트릭, 트레이스를 단일 에이전트로 수집합니다.
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                  Promtail vs Grafana Alloy                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   Promtail (EOL)                    Grafana Alloy                   │
-│   ─────────────────                 ─────────────────               │
-│   • 로그만 수집                      • 로그 + 메트릭 + 트레이스       │
-│   • Loki 전용                        • OTEL 표준 지원               │
-│   • 2026년 3월 EOL                   • 적극적 개발 중               │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Docker Compose 설정 (Alloy)
-
-```yaml
-# docker-compose.yml
-services:
-  loki:
-    image: grafana/loki:3.6.0
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./loki-config.yaml:/etc/loki/local-config.yaml
-    command: -config.file=/etc/loki/local-config.yaml
-
-  alloy:
-    image: grafana/alloy:latest
-    ports:
-      - "12345:12345"  # Alloy UI
-    volumes:
-      - ./alloy-config.alloy:/etc/alloy/config.alloy
-      - /var/log:/var/log:ro
-    command:
-      - run
-      - /etc/alloy/config.alloy
-      - --server.http.listen-addr=0.0.0.0:12345
-
-  grafana:
-    image: grafana/grafana:12.3.0
-    ports:
-      - "3000:3000"
-```
-
-### Alloy 설정 파일
-
-```hcl
-// alloy-config.alloy
-
-// 로그 소스 정의
-local.file_match "spring_logs" {
-  path_targets = [{
-    __address__ = "localhost",
-    __path__    = "/var/log/spring-app/*.log",
-    job         = "spring-app",
-  }]
-}
-
-// 로그 수집
-loki.source.file "spring" {
-  targets    = local.file_match.spring_logs.targets
-  forward_to = [loki.write.default.receiver]
-}
-
-// Loki로 전송
-loki.write "default" {
-  endpoint {
-    url = "http://loki:3100/loki/api/v1/push"
-  }
-}
-```
-
-### Promtail → Alloy 설정 변환
+### Promtail → Alloy 마이그레이션
 
 ```bash
 # 자동 변환 도구 사용
@@ -830,12 +798,59 @@ alloy convert --source-format=promtail \
 
 ```
 [ ] Grafana Alloy 설치
-[ ] 기존 Promtail 설정 변환
+[ ] 기존 Promtail 설정 변환 (alloy convert)
 [ ] 변환된 설정 검증
 [ ] Alloy로 로그 수집 테스트
 [ ] 기존 Promtail 중지
 [ ] 메트릭 이름 변경 확인 (대시보드/알림)
 ```
+
+### 레거시 Promtail 설정 (참조용)
+
+```yaml
+# promtail/promtail-config.yml (레거시 - 사용하지 마세요)
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: spring-boot
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: spring-boot
+          __path__: /app/logs/*.log
+
+    pipeline_stages:
+      - multiline:
+          firstline: '^\d{4}-\d{2}-\d{2}'
+          max_wait_time: 3s
+      - json:
+          expressions:
+            level: level
+            logger: logger
+            message: message
+            traceId: traceId
+      - labels:
+          level:
+          traceId:
+```
+
+### Promtail vs Alloy 비교
+
+| 항목 | Promtail (EOL) | Grafana Alloy |
+|------|----------------|---------------|
+| 수집 대상 | 로그만 | 로그 + 메트릭 + 트레이스 |
+| 표준 | Loki 전용 | OpenTelemetry 표준 |
+| 상태 | 2026-03-02 EOL | 적극 개발 중 |
+| 설정 형식 | YAML | HCL (River) |
 
 ---
 
