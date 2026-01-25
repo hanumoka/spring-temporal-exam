@@ -925,4 +925,4 @@ class OrderServiceOptimisticLockTest {
 
 ## 다음 단계
 
-[05-idempotency.md](./05-idempotency.md) - 멱등성 처리로 이동
+[06-bean-validation.md](./06-bean-validation.md) - 입력 검증으로 이동

@@ -933,6 +933,9 @@ public class InventoryService {
 
 ### 결제 서비스에 세마포어 적용
 
+> **참고**: 실제 PG사 연동 대신 Fake 구현체를 사용합니다.
+> 자세한 내용은 [D015. 외부 서비스 시뮬레이션 전략](../../architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략)을 참조하세요.
+
 ```java
 // service-payment/src/main/java/com/example/payment/service/PaymentService.java
 @Service
@@ -942,7 +945,7 @@ public class PaymentService {
 
     private final RedissonClient redissonClient;
     private final PaymentRepository paymentRepository;
-    private final PaymentGatewayClient pgClient;  // 외부 PG사 API 클라이언트
+    private final PaymentGateway paymentGateway;  // 인터페이스 (Fake 또는 Real 구현체)
 
     // PG사별 동시 호출 제한
     private static final String SEMAPHORE_PREFIX = "semaphore:pg:";
@@ -1588,4 +1591,4 @@ class InventoryServiceConcurrencyTest {
 
 ## 다음 단계
 
-[04-optimistic-lock.md](./04-optimistic-lock.md) - 낙관적 락으로 이동
+[05-optimistic-lock.md](./05-optimistic-lock.md) - 낙관적 락으로 이동

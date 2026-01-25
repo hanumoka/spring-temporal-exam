@@ -644,4 +644,4 @@ resilience4j:
 
 ## 다음 단계
 
-[03-distributed-lock.md](./03-distributed-lock.md) - 분산 락으로 이동
+[04-distributed-lock.md](./04-distributed-lock.md) - 분산 락 / 세마포어로 이동

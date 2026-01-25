@@ -297,11 +297,14 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 - [04-docker-compose.md](./phase1/04-docker-compose.md) - Docker Compose
 
 ### Phase 2-A: REST 기반 Saga
+
+> **학습 순서**: 멱등성이 재시도의 전제조건이므로 Resilience4j 앞에서 학습합니다.
+
 - [01-saga-pattern.md](./phase2a/01-saga-pattern.md) - Saga 패턴
-- [02-resilience4j.md](./phase2a/02-resilience4j.md) - 장애 대응
-- [03-distributed-lock.md](./phase2a/03-distributed-lock.md) - 분산 락 / 세마포어
-- [04-optimistic-lock.md](./phase2a/04-optimistic-lock.md) - 낙관적 락
-- [05-idempotency.md](./phase2a/05-idempotency.md) - 멱등성
+- [02-idempotency.md](./phase2a/02-idempotency.md) - 멱등성 ← 재시도 전 필수
+- [03-resilience4j.md](./phase2a/03-resilience4j.md) - 장애 대응 (재시도, 서킷 브레이커)
+- [04-distributed-lock.md](./phase2a/04-distributed-lock.md) - 분산 락 / 세마포어
+- [05-optimistic-lock.md](./phase2a/05-optimistic-lock.md) - 낙관적 락
 - [06-bean-validation.md](./phase2a/06-bean-validation.md) - 입력 검증
 - [07-exception-handling.md](./phase2a/07-exception-handling.md) - 예외 처리
 - [08-mdc-logging.md](./phase2a/08-mdc-logging.md) - MDC 로깅

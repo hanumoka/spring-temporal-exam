@@ -1226,4 +1226,4 @@ GROUP BY status;
 
 ## 다음 단계
 
-[02-resilience4j.md](./02-resilience4j.md) - 장애 대응으로 이동
+[02-idempotency.md](./02-idempotency.md) - 멱등성 처리로 이동 (재시도 전 필수)

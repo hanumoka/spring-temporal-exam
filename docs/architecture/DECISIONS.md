@@ -18,6 +18,7 @@
 | D012 | 트랜잭션 관리 | TransactionTemplate (프로그래밍 방식) |
 | D013 | Redis 운영 전략 | Pending List 복구 + Phantom Key 대응 |
 | D014 | Spring Boot 버전 전략 | Phase 1~2는 4.x, Phase 3 전 Temporal 호환성 재평가 |
+| D015 | 외부 서비스 시뮬레이션 | Fake 구현체 (인터페이스 기반) |
 
 ---
 
@@ -614,6 +615,179 @@ public Order createOrder(OrderRequest request) {
 
 - [Temporal Spring Boot Integration](https://docs.temporal.io/develop/java/spring-boot-integration)
 - [Spring Boot 4.0 Release Notes](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Release-Notes)
+
+---
+
+## D015. 외부 서비스 시뮬레이션 전략
+
+**결정**: Fake 구현체 (인터페이스 기반)
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    외부 서비스 시뮬레이션 필요성                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [문제]                                                              │
+│  ├── 실제 PG사(토스, 나이스 등) 연동 불가 (개발 계정/비용 이슈)       │
+│  ├── 실제 SMS/이메일 발송 불가 (비용/스팸 이슈)                       │
+│  └── 하지만 MSA 환경 문제(세마포어, 재시도 등) 학습 필요              │
+│                                                                      │
+│  [목적]                                                              │
+│  └── 실제 외부 API 없이도 MSA 환경의 어려움을 체험하고 학습           │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 선택지 비교
+
+| 방식 | 복잡도 | HTTP 통신 | 장애 시뮬레이션 | 학습 가치 |
+|------|--------|----------|----------------|----------|
+| **Fake 구현체** | 낮음 | ❌ | 코드로 제어 | 빠른 구현, 핵심 집중 |
+| WireMock | 중간 | ✅ | 시나리오 파일 | 실제 HTTP 경험 |
+| 별도 Mock 서비스 | 높음 | ✅ | 자유도 높음 | 인프라 이해 |
+
+### 결정 이유
+
+```
+1. 학습 목표 집중
+   └── HTTP 레벨 시뮬레이션보다 세마포어/재시도/분산 트랜잭션 학습이 핵심
+   └── Fake 구현체로도 충분히 동시성/장애 시나리오 체험 가능
+
+2. 인프라 복잡도 최소화
+   └── WireMock 등 추가 인프라 설정 불필요
+   └── 코드만으로 다양한 시나리오 구현
+
+3. 유연한 시나리오 제어
+   └── 지연, 실패, 타임아웃 등을 코드로 직접 제어
+   └── 테스트 시나리오별 동작 변경 용이
+```
+
+### Fake 구현체 설계
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Fake 구현체 구조                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [인터페이스]                                                        │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  public interface PaymentGateway {                           │   │
+│  │      PaymentResult process(PaymentRequest request);          │   │
+│  │      RefundResult refund(String transactionId);              │   │
+│  │  }                                                           │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                          ▲                                          │
+│                          │ implements                               │
+│            ┌─────────────┴─────────────┐                           │
+│            │                           │                            │
+│  ┌─────────────────────┐    ┌─────────────────────┐                │
+│  │  FakePaymentGateway │    │  RealPaymentGateway │                │
+│  │  (학습/테스트용)     │    │  (실제 연동 - 미구현)│                │
+│  └─────────────────────┘    └─────────────────────┘                │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 시뮬레이션 시나리오
+
+| 시나리오 | 구현 방법 | 학습 포인트 |
+|----------|----------|------------|
+| **지연 응답** | `Thread.sleep(2000)` | 타임아웃 처리, Resilience4j |
+| **간헐적 실패** | 랜덤 확률로 예외 발생 | 재시도 전략 |
+| **연속 실패** | 실패 횟수 카운터 | 서킷 브레이커 |
+| **동시 요청 폭주** | 다중 스레드 테스트 | 세마포어 효과 확인 |
+| **부분 성공** | 특정 조건에서만 성공 | 보상 트랜잭션 (Saga) |
+| **중복 요청** | 같은 ID로 재요청 | 멱등성 처리 |
+
+### 예시 구현
+
+```java
+@Component
+@Profile("!production")
+@Slf4j
+public class FakePaymentGateway implements PaymentGateway {
+
+    private final AtomicInteger callCount = new AtomicInteger(0);
+    private final Random random = new Random();
+
+    // 시뮬레이션 설정
+    private int delayMs = 500;           // 기본 지연
+    private double failureRate = 0.1;    // 10% 실패율
+    private int consecutiveFailures = 0; // 연속 실패 횟수 (서킷 브레이커 테스트용)
+
+    @Override
+    public PaymentResult process(PaymentRequest request) {
+        int currentCall = callCount.incrementAndGet();
+        log.info("[Fake PG] 결제 요청 #{}: {}", currentCall, request);
+
+        // 1. 지연 시뮬레이션
+        simulateDelay();
+
+        // 2. 실패 시뮬레이션
+        if (shouldFail()) {
+            log.warn("[Fake PG] 결제 실패 시뮬레이션");
+            throw new PaymentGatewayException("PG사 일시적 오류");
+        }
+
+        // 3. 성공 응답
+        String transactionId = "TXN-" + UUID.randomUUID().toString().substring(0, 8);
+        log.info("[Fake PG] 결제 성공: txId={}", transactionId);
+
+        return new PaymentResult(transactionId, PaymentStatus.SUCCESS);
+    }
+
+    private void simulateDelay() {
+        try {
+            // 기본 지연 + 랜덤 변동 (±50%)
+            int actualDelay = delayMs + random.nextInt(delayMs / 2);
+            Thread.sleep(actualDelay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private boolean shouldFail() {
+        return random.nextDouble() < failureRate;
+    }
+
+    // 테스트용 설정 메서드
+    public void setDelayMs(int delayMs) { this.delayMs = delayMs; }
+    public void setFailureRate(double rate) { this.failureRate = rate; }
+}
+```
+
+### 적용 서비스
+
+| 서비스 | 시뮬레이션 대상 | 주요 학습 포인트 |
+|--------|---------------|-----------------|
+| **Payment Service** | PG사 API | 세마포어, 재시도, 멱등성 |
+| **Notification Service** | SMS/이메일 API | 세마포어, 비동기 처리 |
+
+### Profile 설정
+
+```yaml
+# application.yml
+spring:
+  profiles:
+    active: local  # Fake 구현체 사용
+
+---
+# application-local.yml
+payment:
+  gateway:
+    type: fake
+    delay-ms: 500
+    failure-rate: 0.1
+
+---
+# application-production.yml (향후 확장 시)
+payment:
+  gateway:
+    type: real
+    api-key: ${PG_API_KEY}
+```
 
 ---
 

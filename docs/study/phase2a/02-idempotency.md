@@ -1043,4 +1043,4 @@ class IdempotencyServiceTest {
 
 ## 다음 단계
 
-[06-bean-validation.md](./06-bean-validation.md) - 입력 검증으로 이동
+[03-resilience4j.md](./03-resilience4j.md) - 장애 대응 (재시도, 서킷 브레이커)으로 이동

@@ -3,57 +3,87 @@
 ## 현재 상태
 
 - **현재 Phase**: Phase 1 - 기반 구축
-- **마지막 업데이트**: 2026-01-21
+- **마지막 업데이트**: 2026-01-25
 
 ---
 
 ## Phase 1: 기반 구축
 
-| 항목 | 상태 |
-|------|------|
-| 멀티모듈 프로젝트 구조 설계 | 대기 |
-| 공통 모듈 (common) 구성 | 대기 |
-| 데이터 모델 설계 | 대기 |
-| 각 서비스 모듈 스켈레톤 생성 | 대기 |
-| Docker Compose 인프라 구성 | 대기 |
-| Flyway DB 마이그레이션 설정 | 대기 |
-| Spring Profiles 환경별 설정 | 대기 |
+### 학습 순서 (권장)
+
+```
+01-gradle-multimodule → 02-flyway → 03-spring-profiles → 04-docker-compose
+```
+
+### 진행 현황
+
+| # | 항목 | 상태 | 학습 문서 | 실습 가이드 |
+|---|------|------|----------|------------|
+| 1 | 멀티모듈 프로젝트 구조 설계 | 대기 | 01-gradle-multimodule | step1 |
+| 2 | 공통 모듈 (common) 구성 | 대기 | 01-gradle-multimodule | step2 |
+| 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose | step3 (예정) |
+| 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway | step4 (예정) |
+| 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles | step5 (예정) |
+| 6 | 데이터 모델 설계 | 대기 | - | step6 (예정) |
+| 7 | 각 서비스 모듈 스켈레톤 생성 | 대기 | - | step7 (예정) |
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
-> **학습 순서 변경**: 멱등성이 재시도의 전제조건이므로 Resilience4j 앞으로 이동
+> **외부 서비스 시뮬레이션**: Fake 구현체 사용 ([D015 참조](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략))
 
-| 항목 | 상태 | 학습 문서 |
-|------|------|----------|
-| Order 서비스 도메인/API 구현 | 대기 | 01-saga-pattern |
-| Inventory 서비스 도메인/API 구현 | 대기 | 01-saga-pattern |
-| Payment 서비스 도메인/API 구현 | 대기 | 01-saga-pattern |
-| 오케스트레이터 REST 호출 구현 | 대기 | 01-saga-pattern |
-| 보상 트랜잭션 구현 | 대기 | 01-saga-pattern |
-| 글로벌 예외 처리 | 대기 | 07-exception-handling |
-| **멱등성 처리 (Idempotency Key)** | 대기 | **02-idempotency** |
-| Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j |
-| 재고 차감 분산 락 (Redisson) | 대기 | 04-distributed-lock |
-| 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
-| Bean Validation 입력 검증 | 대기 | 06-bean-validation |
-| MDC 로깅 | 대기 | 08-mdc-logging |
-| TransactionTemplate 적용 | 대기 | 09-transaction-template |
+### 학습 순서 (권장)
+
+```
+01-saga-pattern → 02-idempotency → 03-resilience4j → 04-distributed-lock
+→ 05-optimistic-lock → 06-bean-validation → 07-exception-handling
+→ 08-mdc-logging → 09-transaction-template
+```
+
+> **순서 변경 이유**: 멱등성(02)이 재시도(03)의 전제조건이므로 Resilience4j 앞에서 학습
+
+### 진행 현황
+
+| # | 항목 | 상태 | 학습 문서 |
+|---|------|------|----------|
+| 1 | Saga 패턴 이해 + 서비스 도메인/API 설계 | 대기 | 01-saga-pattern |
+| 2 | Fake PG 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략) |
+| 3 | 오케스트레이터 REST 호출 구현 | 대기 | 01-saga-pattern |
+| 4 | 보상 트랜잭션 구현 | 대기 | 01-saga-pattern |
+| 5 | 멱등성 처리 (Idempotency Key) | 대기 | 02-idempotency |
+| 6 | Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j |
+| 7 | 재고 차감 분산 락 / 세마포어 | 대기 | 04-distributed-lock |
+| 8 | 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
+| 9 | Bean Validation 입력 검증 | 대기 | 06-bean-validation |
+| 10 | 글로벌 예외 처리 | 대기 | 07-exception-handling |
+| 11 | MDC 로깅 | 대기 | 08-mdc-logging |
+| 12 | TransactionTemplate 적용 | 대기 | 09-transaction-template |
 
 ## Phase 2-B: MQ + Redis + Observability
 
-| 항목 | 상태 |
-|------|------|
-| Redis 기초 학습 | 대기 |
-| Redis Stream 학습 | 대기 |
-| Redisson 학습 | 대기 |
-| Notification 서비스 구현 | 대기 |
-| OpenTelemetry/Zipkin 연동 | 대기 |
-| Spring Boot Actuator 설정 | 대기 |
-| Micrometer + Prometheus 연동 | 대기 |
-| Grafana 대시보드 구성 | 대기 |
-| Loki 로그 수집 연동 | 대기 |
-| Alertmanager 장애 알림 설정 | 대기 |
-| Outbox 패턴 (이벤트 발행 신뢰성) | 대기 |
+> **외부 서비스 시뮬레이션**: Fake 구현체 사용 ([D015 참조](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략))
+
+### 학습 순서 (권장)
+
+```
+01-redis-basics → 02-redis-stream → 03-redisson → 04-outbox-pattern
+→ 05-opentelemetry-zipkin → 06-prometheus-grafana → 07-loki → 08-alertmanager
+```
+
+### 진행 현황
+
+| # | 항목 | 상태 | 학습 문서 |
+|---|------|------|----------|
+| 1 | Redis 기초 학습 | 대기 | 01-redis-basics |
+| 2 | Redis Stream 학습 | 대기 | 02-redis-stream |
+| 3 | Redisson 학습 | 대기 | 03-redisson |
+| 4 | Notification 서비스 구현 | 대기 | - |
+| 5 | Fake SMS/Email 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략) |
+| 6 | Outbox 패턴 (이벤트 발행 신뢰성) | 대기 | 04-outbox-pattern |
+| 7 | OpenTelemetry/Zipkin 연동 | 대기 | 05-opentelemetry-zipkin |
+| 8 | Micrometer + Prometheus 연동 | 대기 | 06-prometheus-grafana |
+| 9 | Grafana 대시보드 구성 | 대기 | 06-prometheus-grafana |
+| 10 | Loki 로그 수집 연동 | 대기 | 07-loki |
+| 11 | Alertmanager 장애 알림 설정 | 대기 | 08-alertmanager |
 
 ## Phase 3: Temporal 연동
 
