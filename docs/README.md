@@ -54,7 +54,7 @@ MSA 환경에서 EDA 적용 시 발생하는 어려움을 해결하기 위한 �
 
 | 구분 | 기술 |
 |------|------|
-| Framework | Spring Boot 4.0.1 |
+| Framework | Spring Boot 3.4.0 |
 | Language | Java 21 |
 | Database | MySQL (공유 DB + 스키마 분리) |
 | Cache/Lock | Redis + Redisson |

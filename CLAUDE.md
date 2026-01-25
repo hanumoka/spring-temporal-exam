@@ -24,6 +24,7 @@ MSA/EDA 환경의 어려움 체험 후 Temporal 도입 효과 학습
 2. Phase 2-A: REST Saga + 동시성/장애 대응
 3. Phase 2-B: MQ + Redis + Observability
 4. Phase 3: Temporal 연동
+5. 고도화: Core 라이브러리 (최후 목표)
 
 ## 모듈 구조
 ```
@@ -46,17 +47,6 @@ orchestrator-temporal/  # Temporal 구현
 - Bean Validation (입력 검증)
 - Prometheus + Grafana + Loki + Alertmanager (모니터링/로그/알람)
 - Testcontainers
-
-## Core 라이브러리 (자체 개발)
-> 개인 프로젝트용 공통 라이브러리 - JAR 배포 및 재사용 예정
-
-| 모듈 | 용도 | Phase |
-|------|------|-------|
-| core-lock | 분산락(RLock) + 세마포어(RSemaphore) | Phase 2-A |
-| core-stream | Redis Stream 추상화 | Phase 2-B |
-| core-observability | 메트릭 표준화 (Micrometer) | Phase 2-B |
-
-참조: [sonix_kingarthur core](https://github.com/...) 패턴 참고, 신규 작성
 
 ## 핵심 결정
 - Saga: Orchestration 방식

@@ -19,7 +19,7 @@
 | D013 | Redis 운영 전략 | Pending List 복구 + Phantom Key 대응 |
 | D014 | Spring Boot 버전 전략 | 3.4.0 (Core 라이브러리 동일), 추후 고도화 시 4.x 전환 |
 | D015 | 외부 서비스 시뮬레이션 | Fake 구현체 (인터페이스 기반) |
-| D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포, 개인 프로젝트 재사용 |
+| D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포 (최후 목표, Phase 3 완료 후) |
 
 ---
 
@@ -796,7 +796,7 @@ payment:
 
 ## D016. Core 라이브러리 전략
 
-**결정**: 자체 개발 + JAR 배포, 개인 프로젝트에서 재사용
+**결정**: 자체 개발 + JAR 배포 (최후 목표, Phase 3 완료 후)
 
 ### 배경
 
@@ -805,6 +805,9 @@ payment:
 │                    Core 라이브러리 전략 (2026-01-25)                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
+│  [우선순위]                                                         │
+│  └── 최후 목표 - Phase 1~3 학습 완료 후 진행                        │
+│                                                                      │
 │  [목적]                                                             │
 │  ├── 개인 프로젝트용 공통 라이브러리 개발                           │
 │  ├── 개발 편의 및 코딩 컨벤션 공통화                                │
@@ -812,21 +815,21 @@ payment:
 │                                                                      │
 │  [참조]                                                             │
 │  ├── sonix_kingarthur core (패턴/구조 참고)                         │
-│  └── spring-temporal-exam 요구사항에 맞게 신규 작성                 │
+│  └── spring-temporal-exam 학습 과정에서 도출된 패턴 기반            │
 │                                                                      │
-│  [관리]                                                             │
-│  └── JAR 배포 및 지속 유지보수                                      │
+│  [개발 시점]                                                        │
+│  └── Phase 3 완료 후, 반복 패턴 식별 및 추상화                      │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 모듈 구성
 
-| 모듈 | 용도 | 개발 시점 | 우선순위 |
-|------|------|----------|----------|
-| **core-lock** | RLock (분산락) + RSemaphore (세마포어) | Phase 2-A | 필수 |
-| **core-stream** | Redis Stream 추상화 | Phase 2-B | 필수 |
-| **core-observability** | 메트릭 표준화 (Micrometer) | Phase 2-B | 권장 |
+| 모듈 | 용도 | 우선순위 |
+|------|------|----------|
+| **core-lock** | RLock (분산락) + RSemaphore (세마포어) | 고도화 |
+| **core-stream** | Redis Stream 추상화 | 고도화 |
+| **core-observability** | 메트릭 표준화 (Micrometer) | 고도화 |
 
 ### 기술 스택
 
@@ -858,15 +861,19 @@ payment:
 ### 개발 순서
 
 ```
-1. spring-temporal-exam Phase 1 진행 (멀티모듈 구조)
+1. Phase 1~3 학습 완료 (핵심 목표)
+   ├── Saga 패턴, 동시성 제어, MQ, Observability
+   └── Temporal 연동까지 완료
    │
-2. Phase 2-A 진행 중 core-lock 개발
-   ├── RLock: Inventory Service (재고 차감)
-   └── RSemaphore: Payment/Notification Service (외부 API 제한)
+2. 학습 과정에서 반복 패턴 식별
+   ├── 분산 락 사용 패턴
+   ├── Redis Stream 처리 패턴
+   └── 메트릭 수집 패턴
    │
-3. Phase 2-B 진행 중 core-stream, core-observability 개발
-   ├── Redis Stream 추상화
-   └── 메트릭 표준화
+3. Core 라이브러리 개발 (고도화)
+   ├── core-lock: RLock + RSemaphore 추상화
+   ├── core-stream: Redis Stream 추상화
+   └── core-observability: 메트릭 표준화
    │
 4. JAR 배포 설정 (publishToMavenLocal)
    │
