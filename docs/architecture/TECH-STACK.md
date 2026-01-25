@@ -1,35 +1,64 @@
 # 기술 스택 검증
 
-> **마지막 검토**: 2026년 1월 21일
+> **마지막 검토**: 2026년 1월 25일
 > **검토 결과**: [REVIEW-2026-01.md](../REVIEW-2026-01.md) 참조
 
 ## 검증 완료 항목
 
 | 항목 | 상태 | 검증 내용 |
 |------|------|----------|
-| Spring Boot 4.0.1 | ✅ | 2025년 12월 18일 출시, Spring Framework 7 기반 |
-| Java 21 | ✅ | Spring Boot 4는 Java 17~25 지원 |
-| `spring-boot-starter-webmvc` | ✅ | Spring Boot 4에서 `web` → `webmvc`로 변경됨 |
-| Temporal Spring Boot Integration | ⚠️ | GA 출시됨, Spring Boot 4 호환성 확인 필요 |
+| Spring Boot 3.4.0 | ✅ | Core 라이브러리와 동일 버전 |
+| Java 21 | ✅ | LTS 버전 |
+| Redisson 3.52.0 | ✅ | Spring Boot 3.4 호환 |
+| Temporal Spring Boot Integration | ✅ | Spring Boot 3.x에서 검증됨 |
 
-## 권장 버전 (2026년 1월 기준)
+## 적용 버전 (2026년 1월 기준)
 
-| 컴포넌트 | 권장 버전 | 비고 |
+| 컴포넌트 | 적용 버전 | 비고 |
 |----------|-----------|------|
-| **Spring Boot** | 4.0.1 | Spring Framework 7 기반 |
-| **Temporal SDK** | 1.32.1 | [Releases](https://github.com/temporalio/sdk-java/releases) |
-| **Redisson** | 4.0.0 | Spring Boot 4 호환 |
+| **Spring Boot** | 3.4.0 | Core 라이브러리와 동일 |
+| **Temporal SDK** | 1.32.0 | [Releases](https://github.com/temporalio/sdk-java/releases) |
+| **Redisson** | 3.52.0 | Spring Boot 3.4 호환 |
 | **Grafana** | 12.3.x | [Download](https://grafana.com/grafana/download) |
 | **Loki** | 3.6.x | [Release Notes](https://grafana.com/docs/loki/latest/release-notes/) |
 | **Prometheus** | 3.9.x | [Download](https://prometheus.io/download/) |
 | **Grafana Alloy** | latest | Promtail 대체 |
 
+## 버전 선택 이유
+
+### Spring Boot 3.4.0 선택
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Spring Boot 버전 결정                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [결정] Spring Boot 3.4.0                                           │
+│                                                                      │
+│  [이유]                                                             │
+│  1. Core 라이브러리와 동일 버전 유지                                 │
+│     └── 자체 개발 Core 라이브러리가 Spring Boot 3.4.0 기반          │
+│     └── 버전 불일치 시 호환성 문제 발생                              │
+│                                                                      │
+│  2. Temporal SDK 호환성 보장                                        │
+│     └── temporal-spring-boot-starter가 Spring Boot 3.x 공식 지원    │
+│     └── Spring Boot 4.x 호환성은 미확인                             │
+│                                                                      │
+│  3. Redisson 3.52.0 호환                                            │
+│     └── Redisson 4.0+ 필요 시 Spring Boot 4.x 전환 필요             │
+│     └── 현재는 3.52.0으로 충분                                      │
+│                                                                      │
+│  [추후 고도화]                                                      │
+│  └── Phase 3 완료 후 Spring Boot 4.x 마이그레이션 검토              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ## 참고 링크
 
-- [Spring Boot 4.0.1 릴리즈](https://spring.io/blog/2025/12/18/spring-boot-4-0-1-available-now/)
-- [Spring Boot 4.0 마이그레이션 가이드](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide)
+- [Spring Boot 3.4.0 Release](https://spring.io/blog/2024/11/21/spring-boot-3-4-0-available-now/)
 - [Temporal Java SDK](https://github.com/temporalio/sdk-java)
-- [Redisson 4.0.0 Release](https://github.com/redisson/redisson/releases)
+- [Redisson 3.52.0 Release](https://github.com/redisson/redisson/releases)
 
 ---
 

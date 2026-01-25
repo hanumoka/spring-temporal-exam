@@ -17,8 +17,9 @@
 | D011 | ORM 전략 | JPA + MyBatis 전체 서비스 병행 적용 |
 | D012 | 트랜잭션 관리 | TransactionTemplate (프로그래밍 방식) |
 | D013 | Redis 운영 전략 | Pending List 복구 + Phantom Key 대응 |
-| D014 | Spring Boot 버전 전략 | Phase 1~2는 4.x, Phase 3 전 Temporal 호환성 재평가 |
+| D014 | Spring Boot 버전 전략 | 3.4.0 (Core 라이브러리 동일), 추후 고도화 시 4.x 전환 |
 | D015 | 외부 서비스 시뮬레이션 | Fake 구현체 (인터페이스 기반) |
+| D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포, 개인 프로젝트 재사용 |
 
 ---
 
@@ -565,56 +566,58 @@ public Order createOrder(OrderRequest request) {
 
 ## D014. Spring Boot 버전 전략
 
-**결정**: Phase 1~2는 Spring Boot 4.x 유지, Phase 3 진입 전 Temporal 호환성 재평가
+**결정**: Spring Boot 3.4.0 사용, 추후 고도화 시 4.x 전환
 
 ### 배경
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│              Temporal + Spring Boot 호환성 현황 (2026-01)            │
+│                    Spring Boot 버전 결정 (2026-01-25)                │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  [Spring Boot 4.0.1]                                                 │
-│  ├── 릴리스: 2025년 11월 21일                                        │
-│  ├── 요구사항: Jakarta EE 11, Servlet 6.1                           │
-│  └── javax.* → jakarta.* 완전 전환                                  │
+│  [Core 라이브러리 호환성]                                            │
+│  ├── 자체 개발 Core 라이브러리: Spring Boot 3.4.0 기반              │
+│  ├── Redisson: 3.52.0 (Spring Boot 3.x 호환)                        │
+│  └── Spring Boot 4.x 사용 시 Redisson 4.0+ 필요                     │
 │                                                                      │
-│  [Temporal Spring Boot Starter]                                      │
-│  ├── 공식 지원: Spring Boot 2.x, 3.x                                │
+│  [Temporal 호환성]                                                   │
+│  ├── temporal-spring-boot-starter: Spring Boot 3.x 공식 지원        │
 │  ├── Spring Boot 4.x: 공식 지원 미확인                              │
-│  └── 최신 버전: 1.32.1 (2024-12)                                    │
+│  └── 현재 버전으로 안정적 학습 가능                                  │
 │                                                                      │
-│  [결론]                                                              │
-│  └── Phase 3 시점에 Temporal SDK 업데이트 여부 확인 후 대응         │
+│  [결정]                                                              │
+│  └── Spring Boot 3.4.0으로 진행, 학습 완료 후 버전업 고도화         │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 전략
 
-| Phase | Spring Boot | Temporal | 비고 |
-|-------|-------------|----------|------|
-| Phase 1 | 4.0.1 | 미사용 | Jakarta EE 11 학습 |
-| Phase 2-A | 4.0.1 | 미사용 | Saga, 동시성 학습 |
-| Phase 2-B | 4.0.1 | 미사용 | MQ, Observability 학습 |
-| Phase 3 | **재평가** | 사용 | 호환성 확인 후 결정 |
+| Phase | Spring Boot | 비고 |
+|-------|-------------|------|
+| Phase 1 | 3.4.0 | 기반 구축 |
+| Phase 2-A | 3.4.0 | Saga, 동시성 학습 |
+| Phase 2-B | 3.4.0 | MQ, Observability 학습 |
+| Phase 3 | 3.4.0 | Temporal 연동 |
+| **고도화** | 4.x 전환 | 학습 완료 후 마이그레이션 |
 
-### Phase 3 진입 전 체크리스트
+### 고도화 시 체크리스트
 
 ```
-[ ] Temporal SDK 최신 버전 확인
-[ ] Spring Boot 4 공식 지원 여부 확인
-[ ] 미지원 시 대안 검토:
-    ├── A. Spring Boot 3.x 다운그레이드
-    ├── B. Temporal SDK 직접 통합 (Starter 없이)
-    └── C. 호환성 이슈 직접 해결
-[ ] 테스트 프로젝트에서 검증
+[ ] Spring Boot 4.x 마이그레이션 가이드 참조
+[ ] Core 라이브러리 4.x 업그레이드
+    ├── Redisson 3.52.0 → 4.x
+    ├── Auto-configuration 모듈화 대응
+    └── Breaking changes 적용
+[ ] Temporal SDK Spring Boot 4 지원 확인
+[ ] 전체 테스트 검증
 ```
 
 ### 참고 자료
 
+- [Spring Boot 3.4.0 Release](https://spring.io/blog/2024/11/21/spring-boot-3-4-0-available-now/)
+- [Spring Boot 4.0 Migration Guide](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide)
 - [Temporal Spring Boot Integration](https://docs.temporal.io/develop/java/spring-boot-integration)
-- [Spring Boot 4.0 Release Notes](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Release-Notes)
 
 ---
 
@@ -788,6 +791,113 @@ payment:
     type: real
     api-key: ${PG_API_KEY}
 ```
+
+---
+
+## D016. Core 라이브러리 전략
+
+**결정**: 자체 개발 + JAR 배포, 개인 프로젝트에서 재사용
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Core 라이브러리 전략 (2026-01-25)                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [목적]                                                             │
+│  ├── 개인 프로젝트용 공통 라이브러리 개발                           │
+│  ├── 개발 편의 및 코딩 컨벤션 공통화                                │
+│  └── JAR로 배포하여 다른 프로젝트에서 재사용                        │
+│                                                                      │
+│  [참조]                                                             │
+│  ├── sonix_kingarthur core (패턴/구조 참고)                         │
+│  └── spring-temporal-exam 요구사항에 맞게 신규 작성                 │
+│                                                                      │
+│  [관리]                                                             │
+│  └── JAR 배포 및 지속 유지보수                                      │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 모듈 구성
+
+| 모듈 | 용도 | 개발 시점 | 우선순위 |
+|------|------|----------|----------|
+| **core-lock** | RLock (분산락) + RSemaphore (세마포어) | Phase 2-A | 필수 |
+| **core-stream** | Redis Stream 추상화 | Phase 2-B | 필수 |
+| **core-observability** | 메트릭 표준화 (Micrometer) | Phase 2-B | 권장 |
+
+### 기술 스택
+
+| 항목 | 버전 | 비고 |
+|------|------|------|
+| Spring Boot | 3.4.0 | kingarthur 동일 |
+| Java | 21 | LTS |
+| Redisson | 3.52.0 | Spring Boot 3.4 호환 |
+| Micrometer | (Spring Boot 제공) | Prometheus 연동 |
+| Gradle | 8.x+ | java-library 플러그인 |
+
+### 배포 전략
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    배포 단계별 전략                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [개발 단계] Maven Local                                            │
+│  └── ./gradlew publishToMavenLocal                                  │
+│                                                                      │
+│  [안정화 후] GitHub Packages 또는 Maven Central                     │
+│  ├── MIT 라이선스 적용                                              │
+│  └── 오픈소스 공개                                                  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 개발 순서
+
+```
+1. spring-temporal-exam Phase 1 진행 (멀티모듈 구조)
+   │
+2. Phase 2-A 진행 중 core-lock 개발
+   ├── RLock: Inventory Service (재고 차감)
+   └── RSemaphore: Payment/Notification Service (외부 API 제한)
+   │
+3. Phase 2-B 진행 중 core-stream, core-observability 개발
+   ├── Redis Stream 추상화
+   └── 메트릭 표준화
+   │
+4. JAR 배포 설정 (publishToMavenLocal)
+   │
+5. 안정화 후 GitHub Packages 배포
+```
+
+### 프로젝트 구조 (예정)
+
+```
+spring-temporal-exam/
+├── core/                          # Core 라이브러리
+│   ├── core-lock/
+│   ├── core-stream/
+│   └── core-observability/
+├── common/                        # 비즈니스 공통 (DTO, Event)
+├── service-order/
+├── service-inventory/
+├── service-payment/
+├── service-notification/
+├── orchestrator-pure/
+└── orchestrator-temporal/
+```
+
+### 참고: kingarthur core 모듈
+
+| 모듈 | 기능 | 채택 여부 |
+|------|------|----------|
+| core-lock | 분산락 + 세마포어 | ✅ 채택 |
+| core-stream | Redis Stream 추상화 | ✅ 채택 |
+| core-observability | 메트릭 표준화 | ✅ 채택 |
+| core-transaction | TransactionTemplate 추상화 | ❌ 직접 사용 |
 
 ---
 

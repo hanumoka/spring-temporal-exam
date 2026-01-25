@@ -4,6 +4,19 @@
 
 - **현재 Phase**: Phase 1 - 기반 구축
 - **마지막 업데이트**: 2026-01-25
+- **Spring Boot**: 3.4.0 (Core 라이브러리와 동일 버전)
+
+---
+
+## Core 라이브러리 개발 계획
+
+> 자체 개발 공통 라이브러리 - JAR 배포 및 개인 프로젝트 재사용 ([D016 참조](./architecture/DECISIONS.md#d016-core-라이브러리-전략))
+
+| 모듈 | 용도 | 개발 시점 | 상태 |
+|------|------|----------|------|
+| core-lock | RLock + RSemaphore | Phase 2-A | 대기 |
+| core-stream | Redis Stream 추상화 | Phase 2-B | 대기 |
+| core-observability | 메트릭 표준화 | Phase 2-B | 대기 |
 
 ---
 
@@ -51,12 +64,14 @@
 | 4 | 보상 트랜잭션 구현 | 대기 | 01-saga-pattern |
 | 5 | 멱등성 처리 (Idempotency Key) | 대기 | 02-idempotency |
 | 6 | Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j |
-| 7 | 재고 차감 분산 락 / 세마포어 | 대기 | 04-distributed-lock |
-| 8 | 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
-| 9 | Bean Validation 입력 검증 | 대기 | 06-bean-validation |
-| 10 | 글로벌 예외 처리 | 대기 | 07-exception-handling |
-| 11 | MDC 로깅 | 대기 | 08-mdc-logging |
-| 12 | TransactionTemplate 적용 | 대기 | 09-transaction-template |
+| 7 | **core-lock 모듈 개발** | 대기 | [D016](./architecture/DECISIONS.md#d016-core-라이브러리-전략) |
+| 8 | 재고 차감 분산 락 (RLock) | 대기 | 04-distributed-lock |
+| 9 | PG 호출 제한 세마포어 (RSemaphore) | 대기 | 04-distributed-lock |
+| 10 | 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
+| 11 | Bean Validation 입력 검증 | 대기 | 06-bean-validation |
+| 12 | 글로벌 예외 처리 | 대기 | 07-exception-handling |
+| 13 | MDC 로깅 | 대기 | 08-mdc-logging |
+| 14 | TransactionTemplate 적용 | 대기 | 09-transaction-template |
 
 ## Phase 2-B: MQ + Redis + Observability
 
@@ -76,14 +91,16 @@
 | 1 | Redis 기초 학습 | 대기 | 01-redis-basics |
 | 2 | Redis Stream 학습 | 대기 | 02-redis-stream |
 | 3 | Redisson 학습 | 대기 | 03-redisson |
-| 4 | Notification 서비스 구현 | 대기 | - |
-| 5 | Fake SMS/Email 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략) |
-| 6 | Outbox 패턴 (이벤트 발행 신뢰성) | 대기 | 04-outbox-pattern |
-| 7 | OpenTelemetry/Zipkin 연동 | 대기 | 05-opentelemetry-zipkin |
-| 8 | Micrometer + Prometheus 연동 | 대기 | 06-prometheus-grafana |
-| 9 | Grafana 대시보드 구성 | 대기 | 06-prometheus-grafana |
-| 10 | Loki 로그 수집 연동 | 대기 | 07-loki |
-| 11 | Alertmanager 장애 알림 설정 | 대기 | 08-alertmanager |
+| 4 | **core-stream 모듈 개발** | 대기 | [D016](./architecture/DECISIONS.md#d016-core-라이브러리-전략) |
+| 5 | Notification 서비스 구현 | 대기 | - |
+| 6 | Fake SMS/Email 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략) |
+| 7 | Outbox 패턴 (이벤트 발행 신뢰성) | 대기 | 04-outbox-pattern |
+| 8 | **core-observability 모듈 개발** | 대기 | [D016](./architecture/DECISIONS.md#d016-core-라이브러리-전략) |
+| 9 | OpenTelemetry/Zipkin 연동 | 대기 | 05-opentelemetry-zipkin |
+| 10 | Micrometer + Prometheus 연동 | 대기 | 06-prometheus-grafana |
+| 11 | Grafana 대시보드 구성 | 대기 | 06-prometheus-grafana |
+| 12 | Loki 로그 수집 연동 | 대기 | 07-loki |
+| 13 | Alertmanager 장애 알림 설정 | 대기 | 08-alertmanager |
 
 ## Phase 3: Temporal 연동
 
