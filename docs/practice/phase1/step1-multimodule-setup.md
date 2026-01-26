@@ -4,7 +4,7 @@
 
 ## 목표
 
-Spring Boot 4.0.1 기반 멀티모듈 프로젝트 구조를 직접 구성합니다.
+Spring Boot 3.4.0 기반 멀티모듈 프로젝트 구조를 직접 구성합니다.
 
 ---
 
@@ -58,11 +58,11 @@ orchestrator-temporal
 
 | 라이브러리 | 권장 버전 |
 |-----------|----------|
-| Spring Boot | 4.0.1 |
+| Spring Boot | 3.4.0 |
 | Lombok | (Spring Boot BOM) |
 | MySQL Connector | (Spring Boot BOM) |
 | Flyway | 10.8.1 |
-| Redisson | 4.0.0 |
+| Redisson | 3.52.0 |
 | Resilience4j | 2.2.0 |
 
 ### 힌트

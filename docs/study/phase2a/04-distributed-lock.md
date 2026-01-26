@@ -131,7 +131,7 @@ SELECT * FROM locks WHERE name = 'stock_lock' FOR UPDATE;
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'org.redisson:redisson-spring-boot-starter:4.0.0'  // Spring Boot 4 호환
+    implementation 'org.redisson:redisson-spring-boot-starter:3.52.0'  // Spring Boot 3.4 호환
 }
 ```
 

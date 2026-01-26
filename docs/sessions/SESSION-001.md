@@ -9,7 +9,7 @@
 - [x] 기술 스택 결정
 - [x] CLAUDE.md 생성
 - [x] docs 폴더 문서 구조 생성
-- [x] 기술 스택 검증 (Spring Boot 4.0.1, Temporal GA 확인)
+- [x] 기술 스택 검증 (Spring Boot 3.4.0, Temporal GA 확인)
 - [x] 프로젝트 면밀 검토 및 문서화
 - [x] 아키텍처 결정 사항 문서 (DECISIONS.md) 생성
 - [x] 검토 결과 문서 (REVIEW.md) 생성

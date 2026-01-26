@@ -212,7 +212,7 @@ include 'orchestrator-temporal'
 # gradle/libs.versions.toml
 
 [versions]
-spring-boot = "4.0.1"
+spring-boot = "3.4.0"
 java = "21"
 lombok = "1.18.30"
 
@@ -233,7 +233,7 @@ lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
 
 # Redis
 spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
-redisson = { module = "org.redisson:redisson-spring-boot-starter", version = "4.0.0" }  # Spring Boot 4 호환
+redisson = { module = "org.redisson:redisson-spring-boot-starter", version = "3.52.0" }  # Spring Boot 3.4 호환
 
 # Resilience4j
 resilience4j-spring-boot = { module = "io.github.resilience4j:resilience4j-spring-boot3", version = "2.2.0" }
@@ -909,7 +909,7 @@ static final ArchRule commonShouldNotDependOnServices =
 ```toml
 # 버전 한 곳에서 관리
 [versions]
-spring-boot = "4.0.1"
+spring-boot = "3.4.0"
 
 # 버전 변경 시 한 곳만 수정하면 됨
 ```
