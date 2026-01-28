@@ -208,49 +208,174 @@ include 'orchestrator-temporal'
 
 버전 카탈로그는 **Gradle 7.0+**에서 지원하는 기능으로, 모든 의존성 버전을 한 곳에서 관리합니다.
 
+#### 왜 필요한가?
+
+**기존 방식의 문제점:**
+```groovy
+// module-A/build.gradle
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web:3.4.0'
+}
+
+// module-B/build.gradle
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web:3.3.0'  // 버전 불일치!
+}
+```
+
+- 버전이 여러 파일에 흩어져 있음
+- 버전 불일치 발생 가능
+- 업그레이드 시 여러 파일 수정 필요
+
+#### 기본 구조
+
+`gradle/libs.versions.toml` 파일은 4개 섹션으로 구성됩니다:
+
+```toml
+[versions]      # 버전 정의
+[libraries]     # 라이브러리 정의
+[bundles]       # 라이브러리 묶음 (선택)
+[plugins]       # 플러그인 정의
+```
+
+#### [versions] 섹션
+
+버전 번호만 정의합니다:
+
+```toml
+[versions]
+spring-boot = "3.4.0"
+redisson = "3.52.0"
+resilience4j = "2.2.0"
+flyway = "10.8.1"
+testcontainers = "1.19.3"
+```
+
+#### [libraries] 섹션
+
+라이브러리를 정의합니다. 세 가지 방식이 있습니다:
+
+**방식 A: 버전 참조 (version.ref)** - 권장
+```toml
+redisson = { module = "org.redisson:redisson-spring-boot-starter", version.ref = "redisson" }
+#                       ↑ group:artifact                            ↑ [versions]의 키 참조
+```
+
+**방식 B: 버전 직접 지정**
+```toml
+redisson = { module = "org.redisson:redisson-spring-boot-starter", version = "3.52.0" }
+```
+
+**방식 C: 버전 생략 (BOM 관리 의존성)**
+```toml
+# Spring Boot BOM이 관리하는 의존성은 버전 생략 가능
+spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web" }
+mysql-connector = { module = "com.mysql:mysql-connector-j" }
+```
+
+#### [bundles] 섹션 (선택)
+
+자주 함께 쓰는 라이브러리를 묶음으로 정의:
+
+```toml
+[bundles]
+spring-web = ["spring-boot-starter-web", "spring-boot-starter-validation"]
+database = ["spring-boot-starter-data-jpa", "mysql-connector", "flyway-core", "flyway-mysql"]
+test = ["spring-boot-starter-test", "testcontainers-junit", "testcontainers-mysql"]
+```
+
+**사용:**
+```groovy
+dependencies {
+    implementation libs.bundles.spring.web    // 2개 라이브러리 한번에
+    implementation libs.bundles.database      // 4개 라이브러리 한번에
+    testImplementation libs.bundles.test
+}
+```
+
+#### [plugins] 섹션
+
+Gradle 플러그인 정의:
+
+```toml
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version = "1.1.6" }
+```
+
+**사용:**
+```groovy
+plugins {
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dependency.management)
+}
+```
+
+#### 전체 예시
+
 ```toml
 # gradle/libs.versions.toml
 
 [versions]
 spring-boot = "3.4.0"
-java = "21"
-lombok = "1.18.30"
+redisson = "3.52.0"
+resilience4j = "2.2.0"
+flyway = "10.8.1"
+testcontainers = "1.19.3"
 
 [libraries]
-# Spring Boot Starters
-spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-webmvc" }
+# Spring Boot (BOM 관리 - 버전 생략)
+spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web" }
 spring-boot-starter-data-jpa = { module = "org.springframework.boot:spring-boot-starter-data-jpa" }
 spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }
+spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
 
 # Database
 mysql-connector = { module = "com.mysql:mysql-connector-j" }
-flyway-core = { module = "org.flywaydb:flyway-core" }
-flyway-mysql = { module = "org.flywaydb:flyway-mysql" }
-
-# Lombok
-lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flyway-mysql = { module = "org.flywaydb:flyway-mysql", version.ref = "flyway" }
 
 # Redis
-spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
-redisson = { module = "org.redisson:redisson-spring-boot-starter", version = "3.52.0" }  # Spring Boot 3.4 호환
+redisson = { module = "org.redisson:redisson-spring-boot-starter", version.ref = "redisson" }
 
-# Resilience4j
-resilience4j-spring-boot = { module = "io.github.resilience4j:resilience4j-spring-boot3", version = "2.2.0" }
+# Resilience
+resilience4j-spring-boot = { module = "io.github.resilience4j:resilience4j-spring-boot3", version.ref = "resilience4j" }
+
+# Lombok
+lombok = { module = "org.projectlombok:lombok" }
 
 # Test
-testcontainers-junit = { module = "org.testcontainers:junit-jupiter" }
-testcontainers-mysql = { module = "org.testcontainers:mysql" }
+testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
+testcontainers-mysql = { module = "org.testcontainers:mysql", version.ref = "testcontainers" }
+
+[bundles]
+database = ["spring-boot-starter-data-jpa", "mysql-connector", "flyway-core", "flyway-mysql"]
+test = ["spring-boot-starter-test", "testcontainers-junit", "testcontainers-mysql"]
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
-spring-dependency-management = { id = "io.spring.dependency-management", version = "1.1.4" }
+spring-dependency-management = { id = "io.spring.dependency-management", version = "1.1.6" }
 ```
 
-**장점**:
-- 모든 버전을 한 곳에서 관리
-- IDE 자동완성 지원
-- 타입 안전한 의존성 선언
+#### 명명 규칙
+
+| TOML 키 | Gradle 접근자 |
+|---------|--------------|
+| `spring-boot-starter-web` | `libs.spring.boot.starter.web` |
+| `flyway-core` | `libs.flyway.core` |
+| `testcontainers-mysql` | `libs.testcontainers.mysql` |
+
+**규칙**: `-`(하이픈) → `.`(점)으로 변환
+
+#### 장점 요약
+
+| 장점 | 설명 |
+|------|------|
+| **중앙 집중 관리** | 모든 버전이 한 파일에 |
+| **IDE 자동완성** | `libs.` 입력 시 제안 |
+| **타입 안전** | 오타 시 빌드 에러 |
+| **업그레이드 용이** | 버전 변경 시 한 곳만 수정 |
 
 ---
 
