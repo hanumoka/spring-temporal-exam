@@ -1,6 +1,6 @@
 # 기술 스택 검증
 
-> **마지막 검토**: 2026년 1월 25일
+> **마지막 검토**: 2026년 1월 28일
 > **검토 결과**: [REVIEW-2026-01.md](../REVIEW-2026-01.md) 참조
 
 ## 검증 완료 항목
@@ -67,30 +67,60 @@
 ### ⚠️ Temporal Docker 이미지 변경
 
 `temporalio/auto-setup` 이미지는 **Deprecated** 되었습니다.
+`temporalio/docker-compose` 저장소는 **2026-01-05 아카이브**되었습니다.
 
 **개발 환경 권장 설정**:
 ```bash
-# Temporal CLI 사용 (SQLite 내장, 가장 간단)
+# 방법 1: Temporal CLI (가장 간단, SQLite 내장)
 temporal server start-dev
 
-# Docker로 실행
+# 방법 2: Docker로 CLI 실행
 docker run --rm -p 7233:7233 -p 8233:8233 \
   temporalio/temporal:latest \
   server start-dev --ip 0.0.0.0
 ```
 
+**Docker Compose 사용 시 (외부 DB 필요)**:
+```bash
+# 새로운 공식 예제 저장소
+git clone https://github.com/temporalio/samples-server.git
+cd samples-server/compose
+docker-compose up -d
+```
+
 **프로덕션 환경**: [Temporal Deployment Guide](https://docs.temporal.io/self-hosted-guide/deployment) 참조
+
+**참고 링크**:
+- [samples-server/compose](https://github.com/temporalio/samples-server/tree/main/compose) - 새로운 Docker Compose 예제
+- [temporalio/server](https://hub.docker.com/r/temporalio/server) - 프로덕션 이미지
 
 ### ⚠️ Promtail EOL (2026년 3월 2일)
 
 Promtail은 **End-of-Life** 예정입니다. Grafana Alloy로 마이그레이션하세요.
 
+| 기간 | 상태 | 지원 범위 |
+|------|------|----------|
+| ~ 2025-02-12 | Active | 모든 지원 |
+| 2025-02-13 ~ 2026-02-28 | **LTS** | 보안 패치, 중요 버그 수정만 |
+| 2026-03-02 ~ | **EOL** | 지원 종료 |
+
+**마이그레이션 방법**:
 ```bash
-# Promtail → Alloy 설정 변환
-alloy convert --source-format=promtail --output=alloy-config.alloy promtail-config.yml
+# Promtail → Alloy 설정 자동 변환
+alloy convert --source-format=promtail \
+  --output=alloy-config.alloy \
+  promtail-config.yml
 ```
 
-**참조**: [Promtail to Alloy Migration](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/)
+**Grafana Alloy 장점**:
+- OpenTelemetry Collector 기반
+- 로그, 메트릭, 트레이스 통합 수집
+- 활발한 개발 및 장기 지원
+
+**참조**:
+- [Promtail to Alloy Migration](https://grafana.com/docs/loki/latest/setup/migrate/migrate-to-alloy/)
+- [Grafana Alloy 문서](https://grafana.com/docs/alloy/latest/)
+- [Alloy Docker 이미지](https://hub.docker.com/r/grafana/alloy)
 
 ### ⚠️ Temporal + Spring Boot 4 호환성
 

@@ -858,7 +858,9 @@ scrape_configs:
 
 - [Grafana Loki 공식 문서](https://grafana.com/docs/loki/)
 - [Grafana Alloy 문서](https://grafana.com/docs/alloy/)
-- [Promtail → Alloy 마이그레이션](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/)
+- [Promtail → Alloy 마이그레이션](https://grafana.com/docs/loki/latest/setup/migrate/migrate-to-alloy/)
+- [Grafana Alloy Docker 이미지](https://hub.docker.com/r/grafana/alloy)
+- [Alloy 시나리오 예제](https://github.com/grafana/alloy-scenarios) - Docker Compose 예제 포함
 - [LogQL 문서](https://grafana.com/docs/loki/latest/logql/)
 - [Logstash Logback Encoder](https://github.com/logfellow/logstash-logback-encoder)
 - [Spring Boot 로깅](https://docs.spring.io/spring-boot/reference/features/logging.html)

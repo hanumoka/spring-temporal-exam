@@ -919,6 +919,22 @@ docker run --rm -p 7233:7233 -p 8233:8233 \
 
 #### 방법 2: Docker Compose (외부 DB 필요 시)
 
+> **주의**: `temporalio/docker-compose` 저장소는 2026-01-05 아카이브되었습니다.
+> 새로운 공식 예제는 [samples-server/compose](https://github.com/temporalio/samples-server/tree/main/compose)를 참조하세요.
+
+```bash
+# 새로운 공식 예제 저장소 사용
+git clone https://github.com/temporalio/samples-server.git
+cd samples-server/compose
+
+# PostgreSQL 사용 예제
+docker-compose -f docker-compose-postgres.yml up -d
+
+# MySQL 사용 예제
+docker-compose -f docker-compose-mysql.yml up -d
+```
+
+**직접 설정 시 예시**:
 ```yaml
 # docker-compose-temporal.yml
 services:
@@ -949,10 +965,6 @@ services:
       - "8080:8080"
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
-```
-
-```bash
-docker-compose -f docker-compose-temporal.yml up -d
 ```
 
 > **참고**: 프로덕션 환경 설정은 [Temporal Deployment Guide](https://docs.temporal.io/self-hosted-guide/deployment) 참조
