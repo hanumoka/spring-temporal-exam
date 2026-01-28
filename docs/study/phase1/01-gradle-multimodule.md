@@ -916,13 +916,188 @@ spring-boot = "3.4.0"
 
 ---
 
-## 9. 실습 과제
+## 9. 실습 가이드
 
-1. 루트에 `settings.gradle` 생성하고 3개 모듈 등록하기
-2. `libs.versions.toml` 파일 생성하고 Spring Boot 의존성 정의하기
-3. `common` 모듈에 공통 DTO 클래스 만들기
-4. `service-order` 모듈에서 `common` 의존하고 DTO 사용하기
-5. `./gradlew build`로 전체 빌드 성공시키기
+### Step 1: 멀티모듈 프로젝트 구조 설계
+
+#### 1-1. settings.gradle 모듈 등록
+
+**해야 할 일**: 7개 모듈을 등록하세요.
+
+```
+common
+service-order
+service-inventory
+service-payment
+service-notification
+orchestrator-pure
+orchestrator-temporal
+```
+
+**힌트**: `include` 키워드 사용
+
+**검증**:
+```bash
+./gradlew projects
+```
+
+---
+
+#### 1-2. 버전 카탈로그 생성
+
+**해야 할 일**: `gradle/libs.versions.toml` 파일 생성
+
+| 라이브러리 | 권장 버전 |
+|-----------|----------|
+| Spring Boot | 3.4.0 |
+| Flyway | 10.8.1 |
+| Redisson | 3.52.0 |
+| Resilience4j | 2.2.0 |
+
+**힌트**:
+```toml
+[versions]
+# 버전 정의
+
+[libraries]
+# 라이브러리 정의
+
+[plugins]
+# 플러그인 정의
+```
+
+---
+
+#### 1-3. 루트 build.gradle 설정
+
+**해야 할 일**: `allprojects`와 `subprojects` 블록 설정
+
+- **allprojects**: group, version, repositories
+- **subprojects**: java 플러그인, Java 21 toolchain, 공통 의존성
+
+**주의**: 루트에서는 `spring-boot` 플러그인을 직접 적용하지 않음
+
+---
+
+#### 1-4. 모듈 폴더 생성
+
+**해야 할 일**: 7개 모듈 폴더와 build.gradle 생성
+
+| 모듈 | 특성 | 주요 의존성 |
+|------|------|-----------|
+| common | 라이브러리 모듈 | validation |
+| service-* | 실행 가능 | web, jpa, mysql |
+| orchestrator-* | 실행 가능 | web, common |
+
+**검증**:
+```bash
+./gradlew :common:build
+./gradlew :service-order:build
+```
+
+---
+
+### Step 2: 공통 모듈 (common) 구성
+
+#### 2-1. common/build.gradle 작성
+
+**고려 사항**:
+- `java-library` 플러그인 사용
+- `api` vs `implementation` 차이 이해
+
+```groovy
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    api libs.spring.boot.starter.validation  // 전이됨
+    // implementation은 전이 안됨
+}
+```
+
+---
+
+#### 2-2. 공통 DTO 정의
+
+**패키지 구조**:
+```
+common/src/main/java/com/hanumoka/common/
+└── dto/
+    ├── order/
+    │   ├── CreateOrderRequest.java
+    │   ├── OrderResponse.java
+    │   └── OrderStatus.java (enum)
+    ├── inventory/
+    │   └── ReserveStockRequest.java
+    └── payment/
+        └── ProcessPaymentRequest.java
+```
+
+**Bean Validation 적용**: `@NotNull`, `@Positive`, `@Size` 등
+
+---
+
+#### 2-3. 공통 예외 클래스 정의
+
+**패키지 구조**:
+```
+common/src/main/java/com/hanumoka/common/
+└── exception/
+    ├── BusinessException.java
+    ├── ErrorCode.java (enum)
+    ├── OrderNotFoundException.java
+    ├── InsufficientStockException.java
+    └── PaymentFailedException.java
+```
+
+---
+
+#### 2-4. 공통 이벤트 클래스 정의
+
+**패키지 구조**:
+```
+common/src/main/java/com/hanumoka/common/
+└── event/
+    ├── DomainEvent.java
+    ├── OrderCreatedEvent.java
+    └── PaymentCompletedEvent.java
+```
+
+---
+
+### 최종 검증
+
+```bash
+# 전체 빌드
+./gradlew clean build
+
+# 모듈 의존성 확인
+./gradlew dependencies
+```
+
+**성공 기준**:
+- [ ] 7개 모듈 모두 빌드 성공
+- [ ] 순환 참조 없음
+- [ ] 버전 카탈로그 정상 작동
+
+---
+
+### 트러블슈팅
+
+| 문제 | 원인 | 해결 |
+|------|------|------|
+| "Could not find method xxx" | Gradle 버전 불일치 | gradle-wrapper.properties 확인 |
+| 모듈을 찾을 수 없음 | settings.gradle 미등록 | `include` 문 확인 |
+| 순환 참조 | 모듈 간 양방향 의존 | 섹션 7.1 참고 |
+
+---
+
+### 자가 점검 질문
+
+1. `api`와 `implementation`의 차이는 무엇인가요?
+2. 왜 비즈니스 예외는 RuntimeException을 상속하나요?
+3. record와 class 중 DTO에 어떤 것을 선택했나요? 그 이유는?
 
 ---
 

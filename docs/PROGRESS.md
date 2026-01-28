@@ -16,17 +16,19 @@
 01-gradle-multimodule → 02-flyway → 03-spring-profiles → 04-docker-compose
 ```
 
+> 각 학습 문서 하단에 실습 가이드가 포함되어 있습니다.
+
 ### 진행 현황
 
-| # | 항목 | 상태 | 학습 문서 | 실습 가이드 |
-|---|------|------|----------|------------|
-| 1 | 멀티모듈 프로젝트 구조 설계 | 대기 | 01-gradle-multimodule | step1 |
-| 2 | 공통 모듈 (common) 구성 | 대기 | 01-gradle-multimodule | step2 |
-| 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose | step3 (예정) |
-| 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway | step4 (예정) |
-| 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles | step5 (예정) |
-| 6 | 데이터 모델 설계 | 대기 | - | step6 (예정) |
-| 7 | 각 서비스 모듈 스켈레톤 생성 | 대기 | - | step7 (예정) |
+| # | 항목 | 상태 | 학습 문서 |
+|---|------|------|----------|
+| 1 | 멀티모듈 프로젝트 구조 설계 | 대기 | 01-gradle-multimodule |
+| 2 | 공통 모듈 (common) 구성 | 대기 | 01-gradle-multimodule |
+| 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose |
+| 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway |
+| 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles |
+| 6 | 데이터 모델 설계 | 대기 | - |
+| 7 | 각 서비스 모듈 스켈레톤 생성 | 대기 | - |
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
