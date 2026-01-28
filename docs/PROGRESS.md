@@ -39,18 +39,19 @@
 | 1-1 | 버전 카탈로그 생성 (`gradle/libs.versions.toml`) | ✅ 완료 |
 | 1-2 | 루트 build.gradle 수정 (allprojects, subprojects) | ✅ 완료 |
 | 1-3 | 7개 모듈 폴더 생성 | ✅ 완료 |
-| 1-4 | 각 모듈 build.gradle 생성 | 🔄 진행중 |
+| 1-4 | 각 모듈 build.gradle 생성 | ✅ 완료 |
+| 1-5 | 각 모듈 메인 클래스 생성 | 🔄 다음 단계 |
 
-**생성된 모듈 폴더:**
-```
-common/
-service-order/
-service-inventory/
-service-payment/
-service-notification/
-orchestrator-pure/
-orchestrator-temporal/
-```
+**생성된 모듈:**
+| 모듈 | 타입 | 주요 의존성 |
+|------|------|-----------|
+| common | 라이브러리 | validation |
+| service-order | Spring Boot 앱 | web, jpa, mysql |
+| service-inventory | Spring Boot 앱 | web, jpa, mysql |
+| service-payment | Spring Boot 앱 | web, jpa, mysql |
+| service-notification | Spring Boot 앱 | web, jpa, mysql |
+| orchestrator-pure | Spring Boot 앱 | web |
+| orchestrator-temporal | Spring Boot 앱 | web |
 
 ## Phase 2-A: 동기 REST 기반 Saga
 

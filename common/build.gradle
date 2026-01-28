@@ -1,0 +1,7 @@
+plugins {
+    id 'java-library' // 라이브러리 모듈 (실행불가)
+}
+
+dependencies {
+    api 'org.springframework.boot:spring-boot-starter-validation'  // api : 이 의존성을 common을 사용하는 모듈에도 전의
+}
