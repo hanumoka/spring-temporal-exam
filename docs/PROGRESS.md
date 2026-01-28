@@ -22,13 +22,35 @@
 
 | # | 항목 | 상태 | 학습 문서 |
 |---|------|------|----------|
-| 1 | 멀티모듈 프로젝트 구조 설계 | 대기 | 01-gradle-multimodule |
+| 1 | 멀티모듈 프로젝트 구조 설계 | **진행중** | 01-gradle-multimodule |
 | 2 | 공통 모듈 (common) 구성 | 대기 | 01-gradle-multimodule |
 | 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose |
 | 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway |
 | 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles |
 | 6 | 데이터 모델 설계 | 대기 | - |
 | 7 | 각 서비스 모듈 스켈레톤 생성 | 대기 | - |
+
+### Phase 1 상세 진행 (2026-01-28)
+
+**Step 1: 멀티모듈 프로젝트 구조 설계**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 1-1 | 버전 카탈로그 생성 (`gradle/libs.versions.toml`) | ✅ 완료 |
+| 1-2 | 루트 build.gradle 수정 (allprojects, subprojects) | ✅ 완료 |
+| 1-3 | 7개 모듈 폴더 생성 | ✅ 완료 |
+| 1-4 | 각 모듈 build.gradle 생성 | 🔄 진행중 |
+
+**생성된 모듈 폴더:**
+```
+common/
+service-order/
+service-inventory/
+service-payment/
+service-notification/
+orchestrator-pure/
+orchestrator-temporal/
+```
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
