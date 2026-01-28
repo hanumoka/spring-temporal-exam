@@ -1,1 +1,11 @@
+// settings.gradle
 rootProject.name = 'spring-temporal-exam'
+
+// 모든 하위 모듈 등록
+include 'common'
+include 'service-order'
+include 'service-inventory'
+include 'service-payment'
+include 'service-notification'
+include 'orchestrator-pure'
+include 'orchestrator-temporal'

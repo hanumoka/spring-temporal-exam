@@ -22,8 +22,8 @@
 
 | # | 항목 | 상태 | 학습 문서 |
 |---|------|------|----------|
-| 1 | 멀티모듈 프로젝트 구조 설계 | **진행중** | 01-gradle-multimodule |
-| 2 | 공통 모듈 (common) 구성 | 대기 | 01-gradle-multimodule |
+| 1 | 멀티모듈 프로젝트 구조 설계 | ✅ 완료 | 01-gradle-multimodule |
+| 2 | 공통 모듈 (common) 구성 | 🔄 다음 단계 | 01-gradle-multimodule |
 | 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose |
 | 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway |
 | 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles |
@@ -40,18 +40,18 @@
 | 1-2 | 루트 build.gradle 수정 (allprojects, subprojects) | ✅ 완료 |
 | 1-3 | 7개 모듈 폴더 생성 | ✅ 완료 |
 | 1-4 | 각 모듈 build.gradle 생성 | ✅ 완료 |
-| 1-5 | 각 모듈 메인 클래스 생성 | 🔄 다음 단계 |
+| 1-5 | 각 모듈 메인 클래스 생성 | ✅ 완료 |
 
 **생성된 모듈:**
-| 모듈 | 타입 | 주요 의존성 |
-|------|------|-----------|
-| common | 라이브러리 | validation |
-| service-order | Spring Boot 앱 | web, jpa, mysql |
-| service-inventory | Spring Boot 앱 | web, jpa, mysql |
-| service-payment | Spring Boot 앱 | web, jpa, mysql |
-| service-notification | Spring Boot 앱 | web, jpa, mysql |
-| orchestrator-pure | Spring Boot 앱 | web |
-| orchestrator-temporal | Spring Boot 앱 | web |
+| 모듈 | 타입 | 패키지 | 메인 클래스 |
+|------|------|--------|------------|
+| common | 라이브러리 | - | - |
+| service-order | Spring Boot 앱 | `com.hanumoka.order` | OrderApplication |
+| service-inventory | Spring Boot 앱 | `com.hanumoka.inventory` | InventoryApplication |
+| service-payment | Spring Boot 앱 | `com.hanumoka.payment` | PaymentApplication |
+| service-notification | Spring Boot 앱 | `com.hanumoka.notification` | NotificationApplication |
+| orchestrator-pure | Spring Boot 앱 | `com.hanumoka.orchestrator.pure` | PureOrchestratorApplication |
+| orchestrator-temporal | Spring Boot 앱 | `com.hanumoka.orchestrator.temporal` | TemporalOrchestratorApplication |
 
 ## Phase 2-A: 동기 REST 기반 Saga
 

@@ -1,5 +1,12 @@
 plugins {
     id 'java-library' // 라이브러리 모듈 (실행불가)
+    alias(libs.plugins.spring.dependency.management)
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.boot:spring-boot-dependencies:3.4.0"
+    }
 }
 
 dependencies {
