@@ -38,7 +38,7 @@ orchestrator-temporal/  # Temporal 구현
 ```
 
 ## 기술 스택
-- Spring Boot 3.4.0 / Java 21
+- Spring Boot 3.5.9 / Java 21
 - MySQL + JPA + Flyway (DB 마이그레이션)
 - Redis + Redisson 3.52.0 (캐싱, 분산 락)
 - Redis Stream (MQ)
