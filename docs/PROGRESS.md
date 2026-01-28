@@ -23,7 +23,7 @@
 | # | 항목 | 상태 | 학습 문서 |
 |---|------|------|----------|
 | 1 | 멀티모듈 프로젝트 구조 설계 | ✅ 완료 | 01-gradle-multimodule |
-| 2 | 공통 모듈 (common) 구성 | 🔄 다음 단계 | 01-gradle-multimodule |
+| 2 | 공통 모듈 (common) 구성 | **진행중** | 01-gradle-multimodule |
 | 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose |
 | 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway |
 | 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles |
@@ -52,6 +52,26 @@
 | service-notification | Spring Boot 앱 | `com.hanumoka.notification` | NotificationApplication |
 | orchestrator-pure | Spring Boot 앱 | `com.hanumoka.orchestrator.pure` | PureOrchestratorApplication |
 | orchestrator-temporal | Spring Boot 앱 | `com.hanumoka.orchestrator.temporal` | TemporalOrchestratorApplication |
+
+**Step 2: 공통 모듈 (common) 구성**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 2-1 | 패키지 구조 생성 (dto, exception, event, util) | ✅ 완료 |
+| 2-2 | 공통 API 응답 DTO (ApiResponse, ErrorInfo) | ✅ 완료 |
+| 2-3 | 공통 예외 클래스 (BusinessException) | 🔄 다음 단계 |
+| 2-4 | 에러 코드 정의 (ErrorCode enum) | 대기 |
+
+**생성된 공통 클래스:**
+| 패키지 | 클래스 | 용도 |
+|--------|--------|------|
+| `com.hanumoka.common.dto` | ApiResponse<T> | 통일된 API 응답 형식 |
+| `com.hanumoka.common.dto` | ErrorInfo | 에러 정보 (code, message) |
+
+**학습 메모:**
+- API Response Body에 traceId, timestamp 등은 불필요
+- traceId는 Response Header로 전달 (Phase 2-B OpenTelemetry에서 구현)
+- 로깅 정보는 MDC + 구조화된 로그로 처리
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
