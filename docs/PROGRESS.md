@@ -5,6 +5,49 @@
 - **현재 Phase**: Phase 1 - 기반 구축
 - **마지막 업데이트**: 2026-01-28
 - **Spring Boot**: 3.5.9
+- **목표 완료일**: 2026-02-01 (일)
+
+---
+
+## 집중 일정 (4일 완료 목표)
+
+> 기간: 2026-01-29 (목) ~ 2026-02-01 (일)
+
+### Day 1 - 1/29 (목) : Phase 1 완료
+
+| 시간 | 항목 | 상태 |
+|------|------|------|
+| 오전 | Docker Compose 인프라 구성 | ⬜ |
+| 점심 | Flyway DB 마이그레이션 | ⬜ |
+| 오후 | Spring Profiles, 데이터 모델 설계 | ⬜ |
+| 저녁 | 서비스 스켈레톤 생성 | ⬜ |
+
+### Day 2 - 1/30 (금) : Phase 2-A 전반
+
+| 시간 | 항목 | 상태 |
+|------|------|------|
+| 오전 | Saga 패턴 이해, 서비스 API 설계 | ⬜ |
+| 점심 | Fake PG 구현 | ⬜ |
+| 오후 | 오케스트레이터 REST 호출, 보상 트랜잭션 | ⬜ |
+| 저녁 | 멱등성 처리, Resilience4j | ⬜ |
+
+### Day 3 - 1/31 (토) : Phase 2-A 완료 + Phase 2-B
+
+| 시간 | 항목 | 상태 |
+|------|------|------|
+| 오전 | 분산 락, 낙관적 락, Bean Validation | ⬜ |
+| 점심 | 예외 처리, MDC 로깅, TransactionTemplate | ⬜ |
+| 오후 | Redis 기초, Redis Stream, Redisson | ⬜ |
+| 저녁 | Notification 서비스, Outbox 패턴 | ⬜ |
+
+### Day 4 - 2/1 (일) : Phase 2-B 완료 + Phase 3
+
+| 시간 | 항목 | 상태 |
+|------|------|------|
+| 오전 | OpenTelemetry/Zipkin | ⬜ |
+| 점심 | Prometheus/Grafana, Loki, Alertmanager | ⬜ |
+| 오후 | Temporal 개념 + 로컬 인프라 + Spring 연동 | ⬜ |
+| 저녁 | Workflow/Activity, Saga → Temporal 전환 | ⬜ |
 
 ---
 
