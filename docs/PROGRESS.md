@@ -23,8 +23,8 @@
 | # | 항목 | 상태 | 학습 문서 |
 |---|------|------|----------|
 | 1 | 멀티모듈 프로젝트 구조 설계 | ✅ 완료 | 01-gradle-multimodule |
-| 2 | 공통 모듈 (common) 구성 | **진행중** | 01-gradle-multimodule |
-| 3 | Docker Compose 인프라 구성 | 대기 | 04-docker-compose |
+| 2 | 공통 모듈 (common) 구성 | ✅ 완료 | 01-gradle-multimodule |
+| 3 | Docker Compose 인프라 구성 | 🔄 다음 단계 | 04-docker-compose |
 | 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway |
 | 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles |
 | 6 | 데이터 모델 설계 | 대기 | - |
@@ -59,14 +59,16 @@
 |------|------|------|
 | 2-1 | 패키지 구조 생성 (dto, exception, event, util) | ✅ 완료 |
 | 2-2 | 공통 API 응답 DTO (ApiResponse, ErrorInfo) | ✅ 완료 |
-| 2-3 | 공통 예외 클래스 (BusinessException) | 🔄 다음 단계 |
-| 2-4 | 에러 코드 정의 (ErrorCode enum) | 대기 |
+| 2-3 | 공통 예외 클래스 (BusinessException) | ✅ 완료 |
+| 2-4 | 에러 코드 정의 (ErrorCode enum) | ✅ 완료 |
 
 **생성된 공통 클래스:**
 | 패키지 | 클래스 | 용도 |
 |--------|--------|------|
 | `com.hanumoka.common.dto` | ApiResponse<T> | 통일된 API 응답 형식 |
 | `com.hanumoka.common.dto` | ErrorInfo | 에러 정보 (code, message) |
+| `com.hanumoka.common.exception` | BusinessException | 비즈니스 예외 기반 클래스 |
+| `com.hanumoka.common.exception` | ErrorCode | 에러 코드 enum (toErrorInfo 메서드 포함) |
 
 **학습 메모:**
 - API Response Body에 traceId, timestamp 등은 불필요
