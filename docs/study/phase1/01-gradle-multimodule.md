@@ -381,54 +381,205 @@ spring-dependency-management = { id = "io.spring.dependency-management", version
 
 ### 4.3 루트 build.gradle
 
+#### Gradle 기본 개념
+
+Gradle은 **빌드 자동화 도구**입니다. `build.gradle` 파일에서 다음을 정의합니다:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    build.gradle 구조                     │
+├─────────────────────────────────────────────────────────┤
+│  plugins { }      ← 기능 확장 (Java 컴파일, Spring 등)    │
+│  repositories { } ← 라이브러리 다운로드 위치              │
+│  dependencies { } ← 사용할 외부 라이브러리               │
+│  tasks { }        ← 빌드 작업 정의                       │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### 전체 예시 (한 줄씩 설명)
+
 ```groovy
 // build.gradle (루트)
+
+// ═══════════════════════════════════════════════════════
+// 1. plugins 블록: 이 프로젝트에서 사용할 플러그인 선언
+// ═══════════════════════════════════════════════════════
 plugins {
     id 'java'
+    // ↑ Java 컴파일 기능 활성화 (javac 사용)
+
     alias(libs.plugins.spring.boot) apply false
+    // ↑ libs.versions.toml에서 정의한 플러그인 참조
+    // ↑ "apply false" = 루트에는 적용 안 함, 하위 모듈에서 개별 적용
+
     alias(libs.plugins.spring.dependency.management) apply false
+    // ↑ Spring Boot BOM(버전 관리) 플러그인
 }
 
-// 모든 프로젝트(루트 + 하위)에 적용
+// ═══════════════════════════════════════════════════════
+// 2. allprojects 블록: 루트 + 모든 하위 모듈에 적용
+// ═══════════════════════════════════════════════════════
 allprojects {
-    group = 'com.example'
+    group = 'com.hanumoka'
+    // ↑ Maven 좌표의 groupId (패키지명과 유사)
+    // ↑ 예: com.hanumoka:service-order:0.0.1-SNAPSHOT
+
     version = '0.0.1-SNAPSHOT'
+    // ↑ 프로젝트 버전
+    // ↑ SNAPSHOT = 개발 중인 버전
 
     repositories {
         mavenCentral()
+        // ↑ 라이브러리를 다운로드할 저장소
+        // ↑ Maven Central: 가장 큰 공개 저장소
     }
 }
 
-// 하위 프로젝트에만 적용
+// ═══════════════════════════════════════════════════════
+// 3. subprojects 블록: 하위 모듈에만 적용 (루트 제외)
+// ═══════════════════════════════════════════════════════
 subprojects {
     apply plugin: 'java'
+    // ↑ 모든 하위 모듈에 Java 플러그인 적용
+    // ↑ "apply plugin"은 plugins {} 블록 밖에서 사용하는 방식
 
     java {
         toolchain {
             languageVersion = JavaLanguageVersion.of(21)
+            // ↑ Java 21 사용 강제
+            // ↑ 시스템에 Java 21이 없으면 자동 다운로드
         }
     }
 
-    // 공통 의존성
+    // ───────────────────────────────────────────────────
+    // 공통 의존성: 모든 하위 모듈에서 사용할 라이브러리
+    // ───────────────────────────────────────────────────
     dependencies {
         compileOnly libs.lombok
+        // ↑ 컴파일 시에만 필요 (런타임에는 불필요)
+        // ↑ Lombok은 컴파일 시 코드를 생성하고 사라짐
+
         annotationProcessor libs.lombok
+        // ↑ 어노테이션 처리기 (컴파일 시 @Getter 등 처리)
 
         testImplementation libs.spring.boot.starter.test
+        // ↑ 테스트 코드에서만 사용하는 의존성
     }
 
     tasks.named('test') {
         useJUnitPlatform()
+        // ↑ JUnit 5 사용 설정
     }
 }
 ```
 
-**핵심 개념**:
+#### plugins 블록 상세 설명
 
-| 블록 | 적용 범위 | 용도 |
-|------|----------|------|
-| `allprojects` | 루트 + 모든 하위 모듈 | group, version, repositories |
-| `subprojects` | 하위 모듈만 | 공통 플러그인, 의존성 |
+```groovy
+plugins {
+    // 방식 1: 플러그인 ID 직접 지정
+    id 'java'
+
+    // 방식 2: 버전 카탈로그에서 참조 (권장)
+    alias(libs.plugins.spring.boot) apply false
+}
+```
+
+**`apply false`의 의미:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              apply true vs apply false                   │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  plugins {                                               │
+│      id 'java'                      // apply true (기본) │
+│      alias(...) apply false         // 선언만, 적용 안함 │
+│  }                                                       │
+│                                                          │
+│  왜 apply false?                                         │
+│  ├── 루트 프로젝트는 실행 가능한 앱이 아님               │
+│  ├── Spring Boot 플러그인은 JAR/WAR 패키징 기능 제공     │
+│  └── 하위 모듈에서 필요할 때만 개별 적용                 │
+│                                                          │
+│  예시:                                                   │
+│  ├── common 모듈: 라이브러리 → Spring Boot 플러그인 불필요│
+│  └── service-order: 실행 앱 → Spring Boot 플러그인 필요  │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### allprojects vs subprojects
+
+```
+┌─────────────────────────────────────────────────────────┐
+│           프로젝트 구조와 적용 범위                       │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  spring-temporal-exam/        ← 루트 프로젝트            │
+│  ├── common/                  ← 하위 모듈                │
+│  ├── service-order/           ← 하위 모듈                │
+│  └── service-payment/         ← 하위 모듈                │
+│                                                          │
+│  ┌─────────────┬─────────────────────────────────────┐  │
+│  │   블록       │ 적용 대상                           │  │
+│  ├─────────────┼─────────────────────────────────────┤  │
+│  │ allprojects │ 루트 + common + service-order + ... │  │
+│  │ subprojects │ common + service-order + ...        │  │
+│  │             │ (루트 제외!)                         │  │
+│  └─────────────┴─────────────────────────────────────┘  │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### dependencies 블록 상세 설명
+
+```groovy
+dependencies {
+    // ═══════════════════════════════════════════════════
+    // 의존성 구성(Configuration)별 용도
+    // ═══════════════════════════════════════════════════
+
+    implementation libs.spring.boot.starter.web
+    // ↑ 컴파일 + 런타임에 필요
+    // ↑ 가장 일반적인 의존성 선언 방식
+
+    compileOnly libs.lombok
+    // ↑ 컴파일 시에만 필요, 런타임에는 불필요
+    // ↑ 예: Lombok, Annotation Processors
+
+    runtimeOnly libs.mysql.connector
+    // ↑ 런타임에만 필요, 컴파일 시 불필요
+    // ↑ 예: JDBC 드라이버 (인터페이스는 JDK에 있음)
+
+    testImplementation libs.spring.boot.starter.test
+    // ↑ 테스트 코드에서만 사용
+    // ↑ 메인 코드에서는 사용 불가
+
+    annotationProcessor libs.lombok
+    // ↑ 컴파일 시 어노테이션 처리
+    // ↑ @Getter, @Setter 등을 실제 코드로 변환
+}
+```
+
+**의존성 구성 요약:**
+
+| 구성 | 컴파일 | 런타임 | 테스트 | 용도 |
+|------|--------|--------|--------|------|
+| `implementation` | ✓ | ✓ | ✓ | 일반 라이브러리 |
+| `compileOnly` | ✓ | ✗ | ✗ | Lombok, Annotation |
+| `runtimeOnly` | ✗ | ✓ | ✓ | JDBC 드라이버 |
+| `testImplementation` | ✗ | ✗ | ✓ | 테스트 라이브러리 |
+| `annotationProcessor` | 컴파일 시 처리 | - | - | 코드 생성기 |
+
+#### 핵심 개념 요약
+
+| 블록 | 적용 범위 | 주요 용도 |
+|------|----------|----------|
+| `plugins` | 현재 프로젝트 | 기능 확장 (Java, Spring Boot) |
+| `allprojects` | 루트 + 모든 하위 | group, version, repositories |
+| `subprojects` | 하위 모듈만 | 공통 플러그인, 공통 의존성 |
+| `dependencies` | 현재 프로젝트 | 외부 라이브러리 선언 |
 
 ---
 
