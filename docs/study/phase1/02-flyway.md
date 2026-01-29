@@ -822,14 +822,446 @@ flyway {
 
 ---
 
-## 11. 실습 과제
+## 11. 실습 가이드 (Step-by-Step)
 
-1. `service-order` 모듈에 Flyway 의존성 추가
-2. `db/migration` 폴더 생성
-3. `V1__create_orders_table.sql` 작성
-4. 애플리케이션 실행하여 테이블 생성 확인
-5. `V2__add_column.sql` 추가하고 재시작하여 적용 확인
-6. `flyway_schema_history` 테이블 내용 확인
+### 환경 정보
+
+```
+MySQL Host: localhost:21306
+Database: order_db
+User: app_user
+Password: app1234
+```
+
+---
+
+### Step 1: Flyway 의존성 추가
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | Gradle 빌드 파일에 Flyway 라이브러리 의존성 추가 |
+| **Why** | Spring Boot가 시작할 때 Flyway가 자동으로 DB 마이그레이션을 실행하도록 함 |
+| **Structure** | `flyway-core`: 핵심 마이그레이션 엔진<br>`flyway-mysql`: MySQL 특화 기능 (MySQL 8.x 필수) |
+| **How** | Spring Boot 자동 설정이 classpath에서 Flyway를 감지하면 `FlywayAutoConfiguration`이 활성화됨 |
+
+#### 🔧 작업 내용
+
+**파일**: `service-order/build.gradle`
+
+```groovy
+plugins {
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dependency.management)
+}
+
+dependencies {
+    implementation project(':common')
+
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // Flyway 추가
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+
+    runtimeOnly 'com.mysql:mysql-connector-j'
+}
+```
+
+> 💡 **왜 flyway-mysql이 별도로 필요한가?**
+> MySQL 8.x부터 `caching_sha2_password` 인증 방식이 기본값이 되면서, Flyway가 MySQL 전용 드라이버 확장이 필요해졌습니다.
+
+---
+
+### Step 2: application.yml 생성
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | Spring Boot 애플리케이션 설정 파일 생성 |
+| **Why** | DB 연결 정보, JPA 설정, Flyway 설정을 외부화하여 환경별로 다르게 적용 가능 |
+| **Structure** | YAML 계층 구조로 설정을 그룹화 (spring.datasource, spring.jpa, spring.flyway) |
+| **How** | Spring Boot가 시작 시 classpath의 application.yml을 읽어 `Environment`에 바인딩 |
+
+#### 🔧 작업 내용
+
+**파일**: `service-order/src/main/resources/application.yml`
+
+```yaml
+server:
+  port: 8081
+
+spring:
+  application:
+    name: service-order
+
+  datasource:
+    url: jdbc:mysql://localhost:21306/order_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul
+    username: app_user
+    password: app1234
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate    # Flyway가 스키마 관리하므로 Hibernate는 검증만
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+```
+
+#### 📖 설정 상세 설명
+
+| 설정 | 값 | 설명 |
+|------|-----|------|
+| `server.port` | 8081 | 주문 서비스 포트 (서비스별로 다르게 설정) |
+| `ddl-auto: validate` | validate | Flyway가 DDL 관리, Hibernate는 Entity와 테이블 일치 검증만 |
+| `flyway.locations` | classpath:db/migration | 마이그레이션 SQL 파일 위치 |
+| `baseline-on-migrate` | true | 기존 DB에 Flyway 최초 적용 시 baseline 자동 생성 |
+
+> 💡 **왜 ddl-auto를 validate로 설정하나?**
+> - `create`, `update`: Hibernate가 스키마 자동 변경 → **운영에서 위험**
+> - `validate`: Flyway가 스키마 관리, Hibernate는 Entity 매핑 검증만 → **안전**
+
+---
+
+### Step 3: 마이그레이션 폴더 생성
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | Flyway 마이그레이션 SQL 파일을 저장할 폴더 생성 |
+| **Why** | Flyway가 이 위치에서 버전 순서대로 SQL 파일을 찾아 실행 |
+| **Structure** | `src/main/resources/db/migration/` (Spring Boot 기본 경로) |
+| **How** | 앱 시작 시 Flyway가 이 경로를 스캔하여 `flyway_schema_history` 테이블과 비교 후 미적용 스크립트 실행 |
+
+#### 🔧 작업 내용
+
+**폴더 구조 생성**:
+
+```
+service-order/
+└── src/
+    └── main/
+        └── resources/
+            ├── application.yml        ← Step 2에서 생성
+            └── db/
+                └── migration/         ← 이 폴더 생성
+```
+
+> 💡 **왜 이 경로인가?**
+> Spring Boot의 Flyway 자동 설정이 기본적으로 `classpath:db/migration`을 스캔합니다.
+> 다른 경로를 원하면 `spring.flyway.locations`에서 변경 가능합니다.
+
+---
+
+### Step 4: 첫 번째 마이그레이션 스크립트 작성
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | 주문(orders) 테이블을 생성하는 SQL 스크립트 |
+| **Why** | DB 스키마를 버전 관리하여 팀원 간 일관성 유지, 배포 자동화 |
+| **Structure** | 파일명 규칙: `V{버전}__{설명}.sql` (언더스코어 2개 필수) |
+| **How** | Flyway가 버전 번호 순서대로 실행, 한 번 실행된 스크립트는 다시 실행 안 됨 |
+
+#### 🔧 작업 내용
+
+**파일**: `service-order/src/main/resources/db/migration/V1__create_orders_table.sql`
+
+```sql
+-- 주문 테이블 생성
+CREATE TABLE orders (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '주문 ID',
+    order_number VARCHAR(50) NOT NULL UNIQUE COMMENT '주문 번호',
+    customer_id BIGINT NOT NULL COMMENT '고객 ID',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT '주문 상태',
+    total_amount DECIMAL(15, 2) NOT NULL DEFAULT 0 COMMENT '총 금액',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '낙관적 락 버전',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성일시',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정일시',
+
+    INDEX idx_orders_customer (customer_id),
+    INDEX idx_orders_status (status),
+    INDEX idx_orders_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='주문';
+```
+
+#### 📖 테이블 설계 의도
+
+| 컬럼 | 목적 |
+|------|------|
+| `order_number` | 비즈니스 식별자 (외부 노출용, UUID 또는 규칙 기반) |
+| `status` | 주문 상태 (PENDING → CONFIRMED → COMPLETED / CANCELLED) |
+| `version` | JPA 낙관적 락 (`@Version`) - Phase 2-A에서 학습 |
+| `INDEX` | 자주 조회하는 컬럼에 인덱스 추가로 조회 성능 향상 |
+
+> 💡 **파일명 규칙 V1__create_orders_table.sql**
+> - `V`: Versioned Migration (한 번만 실행)
+> - `1`: 버전 번호 (숫자 순서대로 실행)
+> - `__`: 언더스코어 2개 (필수 구분자)
+> - `create_orders_table`: 설명 (가독성용, 스네이크 케이스 권장)
+
+---
+
+### Step 5: 애플리케이션 실행
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | Spring Boot 애플리케이션 시작 |
+| **Why** | Flyway가 앱 시작 시점에 자동으로 마이그레이션 실행 |
+| **How** | 1) DataSource 연결 → 2) Flyway 초기화 → 3) 마이그레이션 실행 → 4) JPA 초기화 |
+
+#### 🔧 작업 내용
+
+**명령어** (프로젝트 루트에서):
+
+```bash
+./gradlew :service-order:bootRun
+```
+
+**예상 로그**:
+
+```
+Flyway Community Edition 10.x.x
+Database: jdbc:mysql://localhost:21306/order_db (MySQL 8.0)
+Successfully validated 1 migration
+Creating Schema History table `order_db`.`flyway_schema_history`
+Current version of schema `order_db`: << Empty Schema >>
+Migrating schema `order_db` to version "1 - create orders table"
+Successfully applied 1 migration to schema `order_db`
+```
+
+#### 📖 실행 순서 이해
+
+```
+Spring Boot 시작
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 1. DataSource 빈 생성               │
+│    (MySQL 연결)                     │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 2. Flyway 빈 생성 및 실행            │
+│    - flyway_schema_history 확인     │
+│    - 미적용 마이그레이션 실행         │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 3. JPA/Hibernate 초기화             │
+│    - Entity와 테이블 매핑 검증       │
+│    (ddl-auto: validate)            │
+└─────────────────────────────────────┘
+    │
+    ▼
+    앱 시작 완료
+```
+
+> 💡 **왜 Flyway가 JPA보다 먼저 실행되나?**
+> Spring Boot의 `FlywayAutoConfiguration`이 `DataSourceInitializedEvent` 전에 실행되도록 설정되어 있습니다.
+> 이로써 JPA가 테이블 검증할 때 이미 테이블이 존재하게 됩니다.
+
+---
+
+### Step 6: 테이블 생성 확인
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | 생성된 테이블과 Flyway 히스토리 확인 |
+| **Why** | 마이그레이션이 정상 적용되었는지 검증 |
+| **Structure** | `flyway_schema_history` 테이블이 마이그레이션 이력 관리 |
+| **How** | version, checksum, installed_on 등으로 적용 이력 추적 |
+
+#### 🔧 작업 내용
+
+**DataGrip 또는 MySQL CLI에서 확인**:
+
+```sql
+-- 테이블 목록 확인
+SHOW TABLES;
+
+-- 예상 결과:
+-- flyway_schema_history
+-- orders
+
+-- orders 테이블 구조 확인
+DESC orders;
+
+-- flyway 히스토리 확인
+SELECT version, description, installed_on, success
+FROM flyway_schema_history;
+```
+
+#### 📖 flyway_schema_history 테이블 구조
+
+| 컬럼 | 설명 |
+|------|------|
+| `installed_rank` | 설치 순서 |
+| `version` | 마이그레이션 버전 |
+| `description` | 설명 (파일명에서 추출) |
+| `type` | SQL, JDBC, SPRING_JDBC 등 |
+| `script` | 스크립트 파일명 |
+| `checksum` | 파일 내용 해시값 (변경 감지용) |
+| `installed_by` | 실행한 DB 사용자 |
+| `installed_on` | 실행 시각 |
+| `execution_time` | 실행 소요 시간 (ms) |
+| `success` | 성공 여부 (1/0) |
+
+> 💡 **checksum의 역할**
+> 이미 적용된 스크립트를 수정하면 checksum이 달라져 에러 발생 → 스크립트 변조 방지
+
+---
+
+### Step 7: 두 번째 마이그레이션 추가
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | 주문 상품(order_items) 테이블 생성 |
+| **Why** | 1:N 관계 테이블 추가, 마이그레이션 누적 실행 이해 |
+| **Structure** | 외래키(FK)로 orders 테이블과 연결 |
+| **How** | Flyway가 V1 이후 V2만 실행 (이미 적용된 V1은 건너뜀) |
+
+#### 🔧 작업 내용
+
+**파일**: `service-order/src/main/resources/db/migration/V2__create_order_items_table.sql`
+
+```sql
+-- 주문 상품 테이블 생성
+CREATE TABLE order_items (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '주문상품 ID',
+    order_id BIGINT NOT NULL COMMENT '주문 ID',
+    product_id BIGINT NOT NULL COMMENT '상품 ID',
+    product_name VARCHAR(200) NOT NULL COMMENT '상품명',
+    quantity INT NOT NULL DEFAULT 1 COMMENT '수량',
+    unit_price DECIMAL(15, 2) NOT NULL COMMENT '단가',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성일시',
+
+    CONSTRAINT fk_order_items_order
+        FOREIGN KEY (order_id) REFERENCES orders(id)
+        ON DELETE CASCADE,
+
+    INDEX idx_order_items_order (order_id),
+    INDEX idx_order_items_product (product_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='주문 상품';
+```
+
+#### 📖 외래키 설계 포인트
+
+| 설정 | 의미 |
+|------|------|
+| `FOREIGN KEY (order_id) REFERENCES orders(id)` | order_items.order_id → orders.id 참조 |
+| `ON DELETE CASCADE` | 주문 삭제 시 주문 상품도 함께 삭제 |
+
+> 💡 **ON DELETE CASCADE 주의사항**
+> - 편리하지만 의도치 않은 대량 삭제 위험
+> - 운영에서는 `ON DELETE RESTRICT` (삭제 방지) 또는 소프트 삭제 권장
+> - 학습 목적으로 CASCADE 사용
+
+---
+
+### Step 8: 애플리케이션 재시작 및 확인
+
+#### 📚 학습 포인트
+
+| 항목 | 설명 |
+|------|------|
+| **What** | 앱 재시작하여 V2 마이그레이션 적용 |
+| **Why** | 새로운 마이그레이션이 자동으로 적용되는지 확인 |
+| **How** | Flyway가 히스토리 테이블에서 현재 버전(1) 확인 → V2만 실행 |
+
+#### 🔧 작업 내용
+
+```bash
+# 앱 재시작
+./gradlew :service-order:bootRun
+```
+
+**예상 로그**:
+
+```
+Current version of schema `order_db`: 1
+Migrating schema `order_db` to version "2 - create order items table"
+Successfully applied 1 migration to schema `order_db`
+```
+
+**DB 확인**:
+
+```sql
+-- flyway 히스토리 확인
+SELECT version, description, installed_on, success
+FROM flyway_schema_history;
+
+-- 예상 결과:
+-- | version | description              | success |
+-- |---------|--------------------------|---------|
+-- | 1       | create orders table      | 1       |
+-- | 2       | create order items table | 1       |
+```
+
+#### 📖 Flyway 버전 관리 동작
+
+```
+앱 시작
+    │
+    ▼
+flyway_schema_history 조회
+    │
+    ├── 현재 버전: 1
+    │
+    ▼
+db/migration/ 폴더 스캔
+    │
+    ├── V1__create_orders_table.sql      → 이미 적용됨 (건너뜀)
+    └── V2__create_order_items_table.sql → 미적용 (실행!)
+    │
+    ▼
+V2 실행 완료 → 히스토리에 기록
+```
+
+---
+
+### 실습 완료 체크리스트
+
+- [ ] Flyway 의존성 추가됨
+- [ ] application.yml 생성됨
+- [ ] V1 마이그레이션 실행됨
+- [ ] orders 테이블 생성 확인
+- [ ] V2 마이그레이션 실행됨
+- [ ] order_items 테이블 생성 확인
+- [ ] flyway_schema_history 테이블 내용 확인
+
+---
+
+### 핵심 개념 정리
+
+| 개념 | 설명 |
+|------|------|
+| **버전 관리** | SQL 파일로 스키마 변경 이력 관리 |
+| **자동 적용** | 앱 시작 시 미적용 마이그레이션 자동 실행 |
+| **멱등성** | 이미 적용된 스크립트는 다시 실행 안 함 |
+| **변경 감지** | checksum으로 스크립트 변조 감지 |
+| **순서 보장** | 버전 번호 순서대로 실행 |
 
 ---
 

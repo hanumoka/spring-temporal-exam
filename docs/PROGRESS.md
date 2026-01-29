@@ -3,7 +3,7 @@
 ## 현재 상태
 
 - **현재 Phase**: Phase 1 - 기반 구축
-- **마지막 업데이트**: 2026-01-28
+- **마지막 업데이트**: 2026-01-29
 - **Spring Boot**: 3.5.9
 - **목표 완료일**: 2026-02-01 (일)
 
@@ -17,9 +17,9 @@
 
 | 시간 | 항목 | 상태 |
 |------|------|------|
-| 오전 | Docker Compose 인프라 구성 | ⬜ |
-| 점심 | Flyway DB 마이그레이션 | ⬜ |
-| 오후 | Spring Profiles, 데이터 모델 설계 | ⬜ |
+| 오전 | Docker Compose 인프라 구성 | ✅ |
+| 점심 | Flyway DB 마이그레이션 | ✅ |
+| 오후 | Spring Profiles, 데이터 모델 설계 | ✅ |
 | 저녁 | 서비스 스켈레톤 생성 | ⬜ |
 
 ### Day 2 - 1/30 (금) : Phase 2-A 전반
@@ -67,11 +67,11 @@
 |---|------|------|----------|
 | 1 | 멀티모듈 프로젝트 구조 설계 | ✅ 완료 | 01-gradle-multimodule |
 | 2 | 공통 모듈 (common) 구성 | ✅ 완료 | 01-gradle-multimodule |
-| 3 | Docker Compose 인프라 구성 | 🔄 다음 단계 | 04-docker-compose |
-| 4 | Flyway DB 마이그레이션 설정 | 대기 | 02-flyway |
-| 5 | Spring Profiles 환경별 설정 | 대기 | 03-spring-profiles |
-| 6 | 데이터 모델 설계 | 대기 | - |
-| 7 | 각 서비스 모듈 스켈레톤 생성 | 대기 | - |
+| 3 | Docker Compose 인프라 구성 | ✅ 완료 | 04-docker-compose |
+| 4 | Flyway DB 마이그레이션 설정 | ✅ 완료 | 02-flyway |
+| 5 | Spring Profiles 환경별 설정 | ✅ 완료 | 03-spring-profiles |
+| 6 | 데이터 모델 설계 | ✅ 완료 | - |
+| 7 | 각 서비스 모듈 스켈레톤 생성 | 🔄 다음 단계 | - |
 
 ### Phase 1 상세 진행 (2026-01-28)
 
@@ -117,6 +117,108 @@
 - API Response Body에 traceId, timestamp 등은 불필요
 - traceId는 Response Header로 전달 (Phase 2-B OpenTelemetry에서 구현)
 - 로깅 정보는 MDC + 구조화된 로그로 처리
+
+**Step 3: Docker Compose 인프라 구성 (2026-01-29)**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 3-1 | docker-compose.yml 생성 | ✅ 완료 |
+| 3-2 | MySQL 컨테이너 설정 (healthcheck 포함) | ✅ 완료 |
+| 3-3 | Redis 컨테이너 설정 (healthcheck 포함) | ✅ 완료 |
+| 3-4 | init.sql (DB 초기화 스크립트) | ✅ 완료 |
+| 3-5 | 연결 테스트 (MySQL, Redis) | ✅ 완료 |
+
+**인프라 구성:**
+| 서비스 | 이미지 | 호스트 포트 | 용도 |
+|--------|--------|-------------|------|
+| MySQL | mysql:8.0 | 21306 | 데이터베이스 |
+| Redis | redis:7-alpine | 21379 | 캐시, 분산 락, MQ |
+
+**생성된 데이터베이스:**
+- `order_db` - 주문 서비스
+- `inventory_db` - 재고 서비스
+- `payment_db` - 결제 서비스
+
+**학습 메모:**
+- Docker Healthcheck 개념 심화 학습 (04-docker-compose.md 문서 업데이트)
+- `depends_on` + `condition: service_healthy` 조합으로 서비스 시작 순서 보장
+- 포트 충돌 시 호스트 포트 변경으로 해결 (22xxx → 21xxx)
+
+**Step 4: Flyway DB 마이그레이션 설정 (2026-01-29)**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 4-1 | service-order에 Flyway 의존성 추가 | ✅ 완료 |
+| 4-2 | application.yml 생성 (datasource, jpa, flyway) | ✅ 완료 |
+| 4-3 | db/migration 폴더 생성 | ✅ 완료 |
+| 4-4 | V1__create_orders_table.sql 작성 | ✅ 완료 |
+| 4-5 | V2__create_order_items_table.sql 작성 | ✅ 완료 |
+| 4-6 | 마이그레이션 실행 및 테이블 생성 확인 | ✅ 완료 |
+| 4-7 | Flyway 로깅 설정 추가 | ✅ 완료 |
+
+**생성된 테이블 (order_db):**
+| 테이블 | 용도 |
+|--------|------|
+| orders | 주문 |
+| order_items | 주문 상품 (orders와 1:N) |
+| flyway_schema_history | Flyway 마이그레이션 이력 |
+
+**학습 메모:**
+- `ddl-auto: validate` - Flyway가 DDL 관리, Hibernate는 검증만
+- `baseline-on-migrate: true` - 기존 DB에 Flyway 최초 적용 시 필요
+- MySQL InnoDB에서 FK 선언 시 인덱스 자동 생성 → 중복 인덱스 불필요
+- 파일명 규칙: `V{버전}__{설명}.sql` (언더스코어 2개 필수)
+
+**Step 5: Spring Profiles 환경별 설정 (2026-01-29)**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 5-1 | application.yml 공통 설정으로 리팩토링 | ✅ 완료 |
+| 5-2 | application-local.yml 생성 (로컬 환경) | ✅ 완료 |
+| 5-3 | Profile 활성화 확인 | ✅ 완료 |
+
+**설정 파일 구조 (service-order):**
+| 파일 | 용도 |
+|------|------|
+| application.yml | 공통 설정 (포트, JPA 기본, Flyway) |
+| application-local.yml | 로컬 환경 (DB 접속, 로깅 레벨) |
+
+**학습 메모:**
+- `${SPRING_PROFILES_ACTIVE:local}` - 환경변수 없으면 local 기본값
+- 공통 설정 로드 → 활성 Profile 설정으로 덮어씀
+- `open-in-view: false` - OSIV 비활성화 (성능 best practice)
+- `default_batch_fetch_size: 100` - N+1 문제 완화
+
+**Step 6: 데이터 모델 설계 (2026-01-29)**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 6-1 | service-inventory Flyway + Profiles 설정 | ✅ 완료 |
+| 6-2 | service-payment Flyway + Profiles 설정 | ✅ 완료 |
+| 6-3 | inventory_db 테이블 생성 (products, inventories) | ✅ 완료 |
+| 6-4 | payment_db 테이블 생성 (payments) | ✅ 완료 |
+
+**서비스별 포트:**
+| 서비스 | 포트 | DB |
+|--------|------|-----|
+| service-order | 8081 | order_db |
+| service-inventory | 8082 | inventory_db |
+| service-payment | 8083 | payment_db |
+
+**생성된 테이블:**
+| DB | 테이블 | 용도 |
+|----|--------|------|
+| order_db | orders | 주문 |
+| order_db | order_items | 주문 상품 (orders 1:N) |
+| inventory_db | products | 상품 마스터 |
+| inventory_db | inventories | 재고 수량 (products 1:1) |
+| payment_db | payments | 결제 정보 |
+
+**학습 메모:**
+- MSA에서 서비스 간 FK 없음 (DB 독립성 원칙)
+- `payments.order_id`는 논리적 참조 (값만 저장, 애플리케이션에서 정합성 보장)
+- `version` 컬럼 - 낙관적 락용 (Phase 2-A에서 학습)
+- `reserved_quantity` - Saga 패턴에서 재고 예약용
 
 ## Phase 2-A: 동기 REST 기반 Saga
 

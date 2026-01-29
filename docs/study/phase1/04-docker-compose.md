@@ -365,19 +365,193 @@ redis:
 - 모든 쓰기 명령을 로그로 저장
 - 컨테이너 재시작 시 데이터 복구 가능
 
-### 5.4 Healthcheck
+### 5.4 Healthcheck (심화)
+
+#### 왜 필요한가?
+
+**핵심 문제**: 컨테이너 상태 ≠ 서비스 상태
+
+```
+컨테이너 상태: Running ✅
+실제 서비스: 아직 준비 안됨 ❌
+```
+
+| 예시 | 컨테이너 상태 | 실제 상태 |
+|------|-------------|----------|
+| MySQL 시작 직후 | Running | init.sql 실행 중 |
+| Redis 시작 직후 | Running | RDB 파일 로딩 중 |
+| Spring Boot 시작 | Running | Bean 초기화 중 |
+
+**Healthcheck가 해결하는 것**:
+- 컨테이너 내부 서비스가 **실제로 요청을 받을 수 있는 상태인지** 확인
+- 다른 서비스가 의존할 때 **준비될 때까지 대기** 가능
+- 운영 중 **장애 감지** 및 자동 복구 트리거
+
+#### 동작 방식
 
 ```yaml
 healthcheck:
   test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-  interval: 10s    # 10초마다 체크
-  timeout: 5s      # 5초 내 응답 없으면 실패
-  retries: 5       # 5번 실패하면 unhealthy
+  interval: 10s
+  timeout: 5s
+  retries: 5
 ```
 
-**용도**:
-- 컨테이너가 실제로 정상 동작하는지 확인
-- `depends_on`과 함께 사용하여 의존성 순서 보장
+**동작 흐름**:
+```
+컨테이너 시작
+    │
+    ▼
+┌─────────────────────────────────┐
+│  interval(10초)마다 test 명령 실행 │
+│  mysqladmin ping -h localhost   │
+└─────────────────────────────────┘
+    │
+    ├── 성공 (exit 0) → healthy
+    │
+    └── 실패 (exit 1)
+            │
+            ├── retries 미만 → 재시도 대기
+            │
+            └── retries 연속 실패 → unhealthy (확정)
+```
+
+**컨테이너 Health 상태 3가지**:
+
+| 상태 | 의미 |
+|------|------|
+| `starting` | 첫 체크 전, 또는 체크 진행 중 |
+| `healthy` | test 명령 성공 (exit code 0) |
+| `unhealthy` | retries 횟수만큼 연속 실패 |
+
+#### 각 옵션 상세
+
+```yaml
+healthcheck:
+  test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 30s   # (선택) 시작 유예 기간
+```
+
+| 옵션 | 설명 | 권장 값 |
+|------|------|---------|
+| `test` | 실행할 명령어 | 서비스별 상이 |
+| `interval` | 체크 간격 | 10~30초 |
+| `timeout` | 명령 응답 대기 시간 | 3~10초 |
+| `retries` | 연속 실패 허용 횟수 | 3~5회 |
+| `start_period` | 시작 후 유예 기간 | 초기화 오래 걸리는 서비스에 설정 |
+
+**`start_period`가 중요한 이유**:
+- MySQL처럼 초기화가 오래 걸리는 서비스에 유용
+- 이 기간 동안 실패해도 unhealthy로 카운트 안 함
+- 예: `start_period: 60s` → 60초 동안은 실패해도 재시도
+
+#### 실제 확인 방법
+
+```bash
+# 컨테이너 상태 확인 (STATUS 컬럼에 healthy 표시)
+docker ps
+
+# 출력 예시
+CONTAINER ID   IMAGE       STATUS                   PORTS
+abc123...      mysql:8.0   Up 2 min (healthy)       22306->3306
+def456...      redis:7     Up 2 min (healthy)       22379->6379
+```
+
+```bash
+# 상세 health 정보 확인
+docker inspect temporal-exam-mysql --format='{{json .State.Health}}' | jq
+
+# 출력 예시
+{
+  "Status": "healthy",
+  "FailingStreak": 0,
+  "Log": [
+    {
+      "Start": "2026-01-29T10:00:00.000Z",
+      "End": "2026-01-29T10:00:00.100Z",
+      "ExitCode": 0,
+      "Output": "mysqld is alive\n"
+    }
+  ]
+}
+```
+
+#### depends_on + condition (핵심!)
+
+**단순 depends_on의 한계**:
+```yaml
+services:
+  app:
+    depends_on:
+      - mysql   # mysql 컨테이너 "시작"만 기다림 (healthy 확인 안함)
+```
+
+**condition과 함께 사용** (권장):
+```yaml
+services:
+  app:
+    depends_on:
+      mysql:
+        condition: service_healthy  # healthy 될 때까지 대기!
+```
+
+**사용 가능한 condition**:
+
+| condition | 의미 |
+|-----------|------|
+| `service_started` | 컨테이너 시작됨 (기본값) |
+| `service_healthy` | healthcheck 통과 |
+| `service_completed_successfully` | 컨테이너 종료 (exit 0) |
+
+#### 서비스별 Healthcheck 예시
+
+**MySQL**:
+```yaml
+healthcheck:
+  test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+  # mysqladmin ping: MySQL 데몬이 연결 가능한지 확인
+```
+
+**Redis**:
+```yaml
+healthcheck:
+  test: ["CMD", "redis-cli", "ping"]
+  # redis-cli ping: Redis가 PONG 응답하는지 확인
+```
+
+**Spring Boot** (향후 컨테이너화 시):
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+  # Actuator health endpoint 호출
+```
+
+**PostgreSQL**:
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U postgres"]
+```
+
+#### 학습 포인트
+
+**Q1: `start_period`가 없으면?**
+- MySQL init.sql 실행이 오래 걸릴 경우, 초기에 unhealthy 상태가 될 수 있음
+- retries 소진 후에도 계속 체크하긴 하지만, 의존 서비스가 시작 안 될 수 있음
+
+**Q2: `mysqladmin ping`의 한계는?**
+- MySQL 데몬만 확인, init.sql 완료 여부는 확인 불가
+- 더 정확한 체크가 필요하면:
+  ```yaml
+  test: ["CMD-SHELL", "mysql -uroot -p$$MYSQL_ROOT_PASSWORD -e 'SELECT 1'"]
+  ```
+
+**Q3: MSA에서 Healthcheck의 의미는?**
+- 서비스 간 의존성 순서 보장
+- 로드밸런서가 healthy 인스턴스에만 트래픽 전달
+- Kubernetes의 `livenessProbe`, `readinessProbe`와 유사한 개념
 
 ---
 
