@@ -20,7 +20,7 @@
 | 오전 | Docker Compose 인프라 구성 | ✅ |
 | 점심 | Flyway DB 마이그레이션 | ✅ |
 | 오후 | Spring Profiles, 데이터 모델 설계 | ✅ |
-| 저녁 | 서비스 스켈레톤 생성 | ⬜ |
+| 저녁 | 서비스 스켈레톤 생성 | ✅ |
 
 ### Day 2 - 1/30 (금) : Phase 2-A 전반
 
@@ -71,7 +71,7 @@
 | 4 | Flyway DB 마이그레이션 설정 | ✅ 완료 | 02-flyway |
 | 5 | Spring Profiles 환경별 설정 | ✅ 완료 | 03-spring-profiles |
 | 6 | 데이터 모델 설계 | ✅ 완료 | - |
-| 7 | 각 서비스 모듈 스켈레톤 생성 | 🔄 다음 단계 | - |
+| 7 | 각 서비스 모듈 스켈레톤 생성 | ✅ 완료 | - |
 
 ### Phase 1 상세 진행 (2026-01-28)
 
@@ -219,6 +219,47 @@
 - `payments.order_id`는 논리적 참조 (값만 저장, 애플리케이션에서 정합성 보장)
 - `version` 컬럼 - 낙관적 락용 (Phase 2-A에서 학습)
 - `reserved_quantity` - Saga 패턴에서 재고 예약용
+
+**Step 7: 각 서비스 모듈 스켈레톤 생성 (2026-01-29)**
+
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| 7-1 | service-order Entity 생성 (Order, OrderItem, OrderStatus) | ✅ 완료 |
+| 7-2 | service-order Repository, Service, Controller 생성 | ✅ 완료 |
+| 7-3 | service-inventory Entity 생성 (Product, Inventory) | ✅ 완료 |
+| 7-4 | service-inventory Repository, Service, Controller 생성 | ✅ 완료 |
+| 7-5 | service-payment Entity 생성 (Payment, PaymentStatus) | ✅ 완료 |
+| 7-6 | service-payment Repository, Service, Controller 생성 | ✅ 완료 |
+| 7-7 | 코드 검토 및 컴파일 오류 수정 | ✅ 완료 |
+
+**서비스별 생성된 클래스:**
+
+| 서비스 | Entity | Repository | Service | Controller |
+|--------|--------|------------|---------|------------|
+| order | Order, OrderItem, OrderStatus | OrderRepository | OrderService | OrderController |
+| inventory | Product, Inventory | ProductRepository, InventoryRepository | InventoryService | InventoryController |
+| payment | Payment, PaymentStatus | PaymentRepository | PaymentService | PaymentController |
+
+**Saga 패턴 준비 메서드:**
+
+| 서비스 | 메서드 | 용도 |
+|--------|--------|------|
+| inventory | reserve() | 재고 예약 (Saga Step) |
+| inventory | confirmReservation() | 예약 확정 (결제 완료 후) |
+| inventory | cancelReservation() | 예약 취소 (보상 트랜잭션) |
+| payment | approve() | 결제 승인 |
+| payment | confirm() | 결제 확정 |
+| payment | refund() | 환불 (보상 트랜잭션) |
+| order | confirmOrder() | 주문 확정 |
+| order | cancelOrder() | 주문 취소 |
+
+**학습 메모:**
+- JPA 관계 매핑: `@ManyToOne(fetch = LAZY)` - 성능 최적화
+- 낙관적 락: `@Version` - 동시성 제어 (Phase 2-A에서 활용)
+- BusinessException 사용법: `ErrorCode.XXX.toErrorInfo()` 패턴
+- Entity 메서드로 비즈니스 로직 캡슐화 (DDD 접근)
+
+**Phase 1 완료!** 🎉
 
 ## Phase 2-A: 동기 REST 기반 Saga
 
