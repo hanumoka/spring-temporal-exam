@@ -1,0 +1,22 @@
+### ============================================
+### Payment Service 테스트 (8083)
+### ============================================
+
+### 1. 결제 생성
+POST http://localhost:8083/api/payments?orderId=1&amount=30000&paymentMethod=CARD
+Content-Type: application/json
+
+### 2. 결제 조회 (ID)
+GET http://localhost:8083/api/payments/1
+
+### 3. 결제 조회 (주문 ID)
+GET http://localhost:8083/api/payments/by-order/1
+
+### 4. 결제 승인
+POST http://localhost:8083/api/payments/1/approve
+
+### 5. 결제 확정
+POST http://localhost:8083/api/payments/1/confirm
+
+### 6. 결제 환불
+POST http://localhost:8083/api/payments/1/refund
