@@ -1591,4 +1591,8 @@ class InventoryServiceConcurrencyTest {
 
 ## 다음 단계
 
-[05-optimistic-lock.md](./05-optimistic-lock.md) - 낙관적 락으로 이동
+[04-1-queue-semaphore.md](./04-1-queue-semaphore.md) - 대기열 + 세마포어 조합으로 이동
+
+> **참고**: 세마포어만으로는 트래픽 폭주 시 요청 거절이 발생합니다.
+> 대기열과 세마포어를 조합하면 버퍼링을 통해 모든 요청을 순차 처리할 수 있습니다.
+> 이 패턴은 Temporal의 Task Queue + Worker 동작 원리를 이해하는 데 도움이 됩니다.

@@ -20,6 +20,7 @@
 | D014 | Spring Boot 버전 전략 | 3.4.0 (Core 라이브러리 동일), 추후 고도화 시 4.x 전환 |
 | D015 | 외부 서비스 시뮬레이션 | Fake 구현체 (인터페이스 기반) |
 | D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포 (최후 목표, Phase 3 완료 후) |
+| D017 | 대기열 + 세마포어 조합 | Redis Queue + RSemaphore (트래픽 폭주 대응) |
 
 ---
 
@@ -905,6 +906,75 @@ spring-temporal-exam/
 | core-stream | Redis Stream 추상화 | ✅ 채택 |
 | core-observability | 메트릭 표준화 | ✅ 채택 |
 | core-transaction | TransactionTemplate 추상화 | ❌ 직접 사용 |
+
+---
+
+## D017. 대기열 + 세마포어 조합 전략
+
+**결정**: 트래픽 폭주 대응을 위해 Redis Queue + RSemaphore 조합 패턴 적용
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    대기열 + 세마포어 조합 필요성                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [세마포어만 사용 시 문제]                                           │
+│  ├── waitTime 내 permit 획득 실패 시 요청 거절 (503)                 │
+│  ├── 트래픽 폭주 시 대량의 요청 실패                                 │
+│  └── 사용자 경험 저하                                                │
+│                                                                      │
+│  [대기열 + 세마포어 조합 효과]                                       │
+│  ├── 요청 거절 없이 버퍼링                                          │
+│  ├── 외부 API Rate Limit 준수하며 순차 처리                         │
+│  └── Temporal의 Task Queue + Worker 동작 원리 이해                  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 적용 서비스
+
+| 서비스 | 적용 | 이유 |
+|--------|------|------|
+| **Payment Service** | ✅ | PG API Rate Limit + 트래픽 폭주 대응 |
+| Inventory Service | ❌ | 분산 락으로 충분, 즉시 응답 필요 |
+| Order Service | ❌ | 동기 처리 필요 |
+| Notification Service | ⚠️ | Phase 2-B Redis Stream에서 처리 |
+
+### 구현 방식
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        아키텍처                                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Producer]                                                         │
+│  POST /payments → 대기열 적재 → 202 Accepted 반환                   │
+│                                                                      │
+│  [Consumer]                                                         │
+│  대기열 폴링 → 세마포어 획득 → PG API 호출 → 결과 저장               │
+│                                                                      │
+│  [Client]                                                           │
+│  GET /payments/{id}/status → 결과 조회 (폴링)                       │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Temporal과의 연관성
+
+| 직접 구현 | Temporal |
+|----------|----------|
+| Redis List/Stream | Task Queue |
+| RSemaphore | `maxConcurrentActivityExecutionSize` |
+| Consumer Scheduler | Worker |
+| 결과 저장/조회 | WorkflowClient Query |
+
+**학습 의의**: 직접 구현의 복잡성을 체험한 후, Temporal이 이를 어떻게 자동화하는지 이해
+
+### 관련 문서
+
+- [04-1-queue-semaphore.md](../study/phase2a/04-1-queue-semaphore.md) - 대기열 + 세마포어 조합 학습
 
 ---
 

@@ -35,10 +35,10 @@
 
 | 시간 | 항목 | 상태 |
 |------|------|------|
-| 오전 | 분산 락, 낙관적 락, Bean Validation | ⬜ |
-| 점심 | 예외 처리, MDC 로깅, TransactionTemplate | ⬜ |
-| 오후 | Redis 기초, Redis Stream, Redisson | ⬜ |
-| 저녁 | Notification 서비스, Outbox 패턴 | ⬜ |
+| 오전 | 분산 락, **대기열+세마포어 조합**, 낙관적 락 | ⬜ |
+| 점심 | Bean Validation, 예외 처리, MDC 로깅 | ⬜ |
+| 오후 | TransactionTemplate, Redis 기초, Redis Stream | ⬜ |
+| 저녁 | Redisson, Notification 서비스, Outbox 패턴 | ⬜ |
 
 ### Day 4 - 2/1 (일) : Phase 2-B 완료 + Phase 3
 
@@ -350,8 +350,8 @@ C3: 결제 환불 ← C2: 재고 예약 취소 ← C1: 주문 취소
 
 ```
 01-saga-pattern → 02-idempotency → 03-resilience4j → 04-distributed-lock
-→ 05-optimistic-lock → 06-bean-validation → 07-exception-handling
-→ 08-mdc-logging → 09-transaction-template
+→ 04-1-queue-semaphore → 05-optimistic-lock → 06-bean-validation
+→ 07-exception-handling → 08-mdc-logging → 09-transaction-template
 ```
 
 > **순서 변경 이유**: 멱등성(02)이 재시도(03)의 전제조건이므로 Resilience4j 앞에서 학습
@@ -368,11 +368,12 @@ C3: 결제 환불 ← C2: 재고 예약 취소 ← C1: 주문 취소
 | 6 | Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j |
 | 7 | 재고 차감 분산 락 (RLock) | 대기 | 04-distributed-lock |
 | 8 | PG 호출 제한 세마포어 (RSemaphore) | 대기 | 04-distributed-lock |
-| 9 | 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
-| 10 | Bean Validation 입력 검증 | 대기 | 06-bean-validation |
-| 11 | 글로벌 예외 처리 | 대기 | 07-exception-handling |
-| 12 | MDC 로깅 | 대기 | 08-mdc-logging |
-| 13 | TransactionTemplate 적용 | 대기 | 09-transaction-template |
+| 9 | **대기열 + 세마포어 조합 (버퍼링)** | 대기 | 04-1-queue-semaphore |
+| 10 | 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock |
+| 11 | Bean Validation 입력 검증 | 대기 | 06-bean-validation |
+| 12 | 글로벌 예외 처리 | 대기 | 07-exception-handling |
+| 13 | MDC 로깅 | 대기 | 08-mdc-logging |
+| 14 | TransactionTemplate 적용 | 대기 | 09-transaction-template |
 
 ## Phase 2-B: MQ + Redis + Observability
 
