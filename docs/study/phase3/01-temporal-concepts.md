@@ -637,6 +637,60 @@ public class TemporalWorkerConfig {
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Worker Rate Limiting (Phase 2-A RSemaphore 대체)
+
+Phase 2-A에서 RSemaphore로 처리량을 제한했던 것을 Temporal에서는 Worker 옵션으로 설정합니다:
+
+```java
+// Worker 생성 시 동시성 제한 설정
+WorkerOptions options = WorkerOptions.newBuilder()
+    // Activity 동시 실행 수 제한 (RSemaphore 역할)
+    .setMaxConcurrentActivityExecutionSize(10)
+
+    // Workflow Task 동시 실행 수 제한
+    .setMaxConcurrentWorkflowTaskExecutionSize(100)
+
+    // Task Queue 레벨에서 초당 Activity 실행 제한
+    .setMaxTaskQueueActivitiesPerSecond(50.0)
+
+    .build();
+
+Worker worker = workerFactory.newWorker("payment-queue", options);
+```
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│               Phase 2-A RSemaphore vs Temporal Worker           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  [Phase 2-A - RSemaphore]                                       │
+│  ─────────────────────────                                      │
+│  RSemaphore semaphore = redisson.getSemaphore("payment:limit"); │
+│  semaphore.trySetPermits(10);                                   │
+│                                                                  │
+│  try {                                                          │
+│      if (semaphore.tryAcquire(5, TimeUnit.SECONDS)) {          │
+│          paymentService.process(request);                       │
+│      }                                                          │
+│  } finally {                                                    │
+│      semaphore.release();                                       │
+│  }                                                              │
+│                                                                  │
+│  → Redis 의존성, 수동 acquire/release, 예외 시 누수 위험        │
+│                                                                  │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                  │
+│  [Temporal - Worker Options]                                    │
+│  ──────────────────────────                                     │
+│  WorkerOptions.newBuilder()                                     │
+│      .setMaxConcurrentActivityExecutionSize(10)  // 동시 10개   │
+│      .build();                                                  │
+│                                                                  │
+│  → 설정만 하면 자동 관리, 누수 없음, Redis 불필요               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 7. 핵심 개념: Task Queue

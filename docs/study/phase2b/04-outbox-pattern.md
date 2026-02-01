@@ -1246,6 +1246,168 @@ WHERE MOD(CONV(SUBSTRING(MD5(aggregate_id), 1, 8), 16, 10), ?) = ?;
 
 ---
 
+## 11. Temporal 미리보기: Outbox가 필요 없어진다
+
+> **Phase 3 예고**: 직접 구현한 Outbox 패턴이 Temporal에서 왜 불필요한지 살펴봅니다.
+
+### 11.1 Outbox 패턴이 해결하는 문제
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          이중 쓰기 문제 복습                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   문제: DB 저장과 메시지 발행을 원자적으로 처리할 수 없음                   │
+│                                                                             │
+│   @Transactional                                                            │
+│   public void createOrder(Order order) {                                    │
+│       orderRepository.save(order);     // DB 트랜잭션                       │
+│       kafkaTemplate.send("orders", order);  // 별도 시스템!                 │
+│   }                                                                         │
+│                                                                             │
+│   해결책: Outbox 테이블 + Polling Publisher                                 │
+│   → DB 저장과 Outbox 저장을 같은 트랜잭션으로 묶음                          │
+│   → 별도 프로세스가 Outbox → Kafka로 발행                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 Temporal에서는 왜 불필요한가?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Temporal의 이벤트 발행 방식                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Temporal Workflow = Event Sourcing                                        │
+│                                                                             │
+│   모든 Activity 호출이 이벤트로 기록됨:                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Event #1: WorkflowExecutionStarted                                 │   │
+│   │  Event #2: ActivityTaskScheduled (createOrder)                      │   │
+│   │  Event #3: ActivityTaskCompleted (result: order-123)                │   │
+│   │  Event #4: ActivityTaskScheduled (reserveStock)                     │   │
+│   │  Event #5: ActivityTaskCompleted (result: reservation-456)          │   │
+│   │  ...                                                                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   → 별도 Outbox 불필요! Temporal이 모든 상태 변경을 영속화                  │
+│   → Activity 성공 = 이벤트 기록됨 (원자성 보장)                             │
+│   → Worker 장애 시 마지막 이벤트부터 재개 (중복 없음)                       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.3 외부 시스템 알림이 필요한 경우
+
+```java
+/**
+ * Temporal에서 외부 시스템에 이벤트 발행이 필요한 경우
+ * → Activity로 처리하면 자동으로 신뢰성 보장!
+ */
+@ActivityInterface
+public interface NotificationActivities {
+    @ActivityMethod
+    void publishToKafka(OrderEvent event);
+
+    @ActivityMethod
+    void sendWebhook(String url, Object payload);
+}
+
+@WorkflowImpl
+public class OrderWorkflowImpl implements OrderWorkflow {
+
+    private final NotificationActivities notifications = Workflow.newActivityStub(
+        NotificationActivities.class,
+        ActivityOptions.newBuilder()
+            .setStartToCloseTimeout(Duration.ofSeconds(30))
+            .setRetryOptions(RetryOptions.newBuilder()
+                .setMaximumAttempts(5)
+                .build())
+            .build()
+    );
+
+    @Override
+    public OrderResult processOrder(OrderRequest request) {
+        // 비즈니스 로직
+        String orderId = orderActivities.createOrder(request);
+        paymentActivities.charge(orderId);
+
+        // 외부 시스템 알림 (Activity로 처리)
+        // → Temporal이 재시도, 멱등성 관리!
+        notifications.publishToKafka(new OrderCompletedEvent(orderId));
+
+        return OrderResult.success(orderId);
+    }
+}
+```
+
+### 11.4 직접 비교: 무엇이 사라지는가?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Phase 2-B → Phase 3 비교                           │
+├────────────────────────────────────┬────────────────────────────────────────┤
+│       Phase 2-B (직접 구현)        │           Phase 3 (Temporal)           │
+├────────────────────────────────────┼────────────────────────────────────────┤
+│                                    │                                        │
+│  ❌ outbox_event 테이블 필요       │  ✅ 불필요 - Temporal Event History    │
+│                                    │                                        │
+│  ❌ Polling Publisher 구현         │  ✅ 불필요 - Activity로 직접 발행      │
+│                                    │                                        │
+│  ❌ FOR UPDATE SKIP LOCKED 쿼리    │  ✅ 불필요 - Temporal Task Queue       │
+│                                    │                                        │
+│  ❌ 재시도/지수 백오프 스케줄러    │  ✅ RetryOptions로 선언적 설정         │
+│                                    │                                        │
+│  ❌ Consumer 멱등성 처리           │  ✅ Activity ID로 자동 중복 방지       │
+│                                    │                                        │
+│  ❌ Dead Letter Queue 관리         │  ✅ Temporal이 실패 이력 보관          │
+│                                    │                                        │
+│  ❌ 정리 스케줄러 (오래된 이벤트)  │  ✅ Workflow Retention Period 설정     │
+│                                    │                                        │
+├────────────────────────────────────┼────────────────────────────────────────┤
+│  코드량: 300줄+ (Mapper/Service)   │  코드량: ~50줄 (Activity 정의)         │
+│  테이블: 2개+ (outbox, processed)  │  테이블: 0개                           │
+│  인프라: Kafka + 스케줄러          │  인프라: Temporal (이미 있음)          │
+└────────────────────────────────────┴────────────────────────────────────────┘
+```
+
+### 11.5 그래도 Outbox가 필요한 경우
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               Temporal 사용 시에도 Outbox가 필요할 수 있는 경우             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Case 1: 레거시 시스템과 연동                                               │
+│  ───────────────────────────                                                │
+│  레거시 시스템이 Kafka 토픽을 구독하고 있고, 변경이 어려운 경우             │
+│  → Activity에서 Kafka로 발행 (Temporal이 신뢰성 보장)                       │
+│                                                                             │
+│  Case 2: 비동기 이벤트 팬아웃                                               │
+│  ────────────────────────                                                   │
+│  하나의 이벤트를 여러 Consumer가 각자 처리해야 하는 경우                    │
+│  → Kafka 토픽 발행이 적합 (Pub/Sub 패턴)                                    │
+│                                                                             │
+│  Case 3: Temporal 외부 시스템                                               │
+│  ─────────────────────────                                                  │
+│  Temporal을 사용하지 않는 다른 마이크로서비스와 통신                        │
+│  → 그 서비스는 여전히 Outbox 패턴 필요                                      │
+│                                                                             │
+│  결론: Temporal 내부 흐름에서는 불필요, 외부 연동 시 Activity로 해결        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.6 Phase 3에서 확인할 것들
+
+- [ ] Temporal Event History에서 모든 Activity 결과 확인
+- [ ] Activity 실패 시 자동 재시도 동작 확인
+- [ ] Kafka 발행을 Activity로 처리하는 패턴
+- [ ] Phase 2-B Outbox 코드와 비교
+
+---
+
 ## 다음 단계
 
 [05-opentelemetry-zipkin.md](./05-opentelemetry-zipkin.md) - 분산 추적으로 이동

@@ -915,11 +915,229 @@ class OrderServiceOptimisticLockTest {
 
 ---
 
+## 10. Temporal 미리보기: 낙관적 락이 덜 필요해진다
+
+> **Phase 3 예고**: 직접 구현한 낙관적 락이 Temporal에서 왜 덜 필요한지 살펴봅니다.
+
+### 10.1 현재 구현에서 낙관적 락이 필요한 이유
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  REST 환경에서 낙관적 락이 필요한 상황                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   문제 상황: 동시에 여러 요청이 같은 주문을 수정                             │
+│                                                                             │
+│   [요청 A]                              [요청 B]                            │
+│   주문 조회 → Order(status=PENDING)     주문 조회 → Order(status=PENDING)   │
+│        ↓                                      ↓                             │
+│   status = CONFIRMED                    status = CANCELLED                  │
+│        ↓                                      ↓                             │
+│   저장 시도 ─────────────────────────→ 저장 시도                            │
+│                                                                             │
+│   ❌ 둘 다 성공하면 데이터 불일치!                                           │
+│                                                                             │
+│   해결: @Version으로 충돌 감지                                               │
+│   → 나중 요청이 OptimisticLockException 발생                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 Temporal에서는 왜 덜 필요한가?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   Temporal Workflow의 단일 실행 보장                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   핵심 원리: 하나의 Workflow ID = 하나의 실행                               │
+│                                                                             │
+│   [요청 A]                              [요청 B]                            │
+│   WorkflowId: order-123                 WorkflowId: order-123               │
+│        ↓                                      ↓                             │
+│   Workflow 시작 ──────────────────────→ 이미 실행 중!                       │
+│        ↓                                      ↓                             │
+│   정상 처리                              WorkflowExecutionAlreadyStarted    │
+│                                          → 기존 Workflow에 Signal 전송      │
+│                                          → 또는 결과 대기                   │
+│                                                                             │
+│   ✅ 동시 수정 자체가 발생하지 않음!                                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.3 Temporal Workflow의 상태 관리
+
+```java
+/**
+ * Temporal Workflow - 상태 변경이 직렬화됨
+ */
+@WorkflowInterface
+public interface OrderWorkflow {
+    @WorkflowMethod
+    OrderResult processOrder(OrderRequest request);
+
+    @SignalMethod
+    void cancelOrder(String reason);
+
+    @QueryMethod
+    OrderStatus getStatus();
+}
+
+@WorkflowImpl
+public class OrderWorkflowImpl implements OrderWorkflow {
+
+    // Workflow 내부 상태 - Temporal이 관리
+    private OrderStatus status = OrderStatus.PENDING;
+    private String cancellationReason;
+
+    @Override
+    public OrderResult processOrder(OrderRequest request) {
+        // 상태 전이 - 순차적으로 실행됨 (동시 실행 없음!)
+        status = OrderStatus.PROCESSING;
+
+        // Activity 호출
+        inventoryActivity.reserve(request);
+        status = OrderStatus.INVENTORY_RESERVED;
+
+        paymentActivity.charge(request);
+        status = OrderStatus.PAYMENT_COMPLETED;
+
+        return OrderResult.success();
+    }
+
+    @Override
+    public void cancelOrder(String reason) {
+        // Signal로 들어온 요청도 순차 처리!
+        // 현재 상태에 따라 적절한 보상 실행
+        if (status == OrderStatus.PAYMENT_COMPLETED) {
+            paymentActivity.refund();
+        }
+        if (status.ordinal() >= OrderStatus.INVENTORY_RESERVED.ordinal()) {
+            inventoryActivity.release();
+        }
+        this.cancellationReason = reason;
+        status = OrderStatus.CANCELLED;
+    }
+}
+```
+
+### 10.4 여전히 낙관적 락이 필요한 경우
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              Temporal 사용 시에도 낙관적 락이 필요한 경우                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Case 1: Activity 내부에서 DB 직접 수정                                    │
+│   ─────────────────────────────────────                                     │
+│   @ActivityImpl                                                             │
+│   public class InventoryActivityImpl {                                      │
+│       public void reserve(ReserveRequest req) {                             │
+│           // 여기서 DB 직접 접근 → 낙관적 락 여전히 필요!                    │
+│           Inventory inv = repo.findById(req.getProductId());                │
+│           inv.decreaseQuantity(req.getQuantity());                          │
+│           repo.save(inv);  // @Version 필요                                 │
+│       }                                                                     │
+│   }                                                                         │
+│                                                                             │
+│   이유: 여러 Workflow가 동시에 같은 상품 재고 수정 가능                      │
+│                                                                             │
+│   ─────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│   Case 2: 외부 시스템과 연동                                                │
+│   ────────────────────────                                                  │
+│   Activity가 외부 API 호출 시 멱등성/동시성은 외부 시스템 책임               │
+│                                                                             │
+│   ─────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│   Case 3: 한 Workflow가 여러 Entity 수정                                    │
+│   ────────────────────────────────────                                      │
+│   하나의 Activity에서 여러 테이블 수정 시                                   │
+│   각 테이블에 대한 동시성 제어 필요                                         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.5 직접 비교: 무엇이 달라지는가?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Phase 2-A → Phase 3 비교                           │
+├────────────────────────────────┬────────────────────────────────────────────┤
+│      Phase 2-A (직접 구현)     │           Phase 3 (Temporal)               │
+├────────────────────────────────┼────────────────────────────────────────────┤
+│                                │                                            │
+│  주문 상태 관리:               │  주문 상태 관리:                           │
+│  ❌ @Version 필수              │  ✅ Workflow 내부 상태로 관리              │
+│  ❌ 충돌 시 재시도 로직 필요   │  ✅ Signal로 순차 처리                     │
+│                                │                                            │
+│  재고 관리:                    │  재고 관리:                                │
+│  ❌ @Version 또는 분산락 필요  │  ⚠️ Activity에서 여전히 필요               │
+│                                │     (여러 Workflow가 동시 접근)            │
+│                                │                                            │
+│  Saga 상태 관리:               │  Saga 상태 관리:                           │
+│  ❌ @Version으로 동시 수정 방지│  ✅ Workflow가 상태 - 락 불필요            │
+│                                │                                            │
+├────────────────────────────────┼────────────────────────────────────────────┤
+│  낙관적 락 사용처:             │  낙관적 락 사용처:                         │
+│  • Order 엔티티               │  • Inventory 등 공유 리소스만              │
+│  • SagaState 엔티티           │  • (Workflow 상태는 락 불필요)              │
+│  • Inventory 엔티티           │                                            │
+└────────────────────────────────┴────────────────────────────────────────────┘
+```
+
+### 10.6 Temporal의 동시성 제어 메커니즘
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Temporal 내장 동시성 제어                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   1. Workflow ID Uniqueness                                                 │
+│   ─────────────────────────                                                 │
+│   • 같은 ID로 동시 시작 불가                                                │
+│   • WorkflowExecutionAlreadyStarted 예외                                    │
+│                                                                             │
+│   2. Event Sourcing                                                         │
+│   ─────────────────                                                         │
+│   • 모든 상태 변경이 이벤트로 기록                                          │
+│   • 이벤트 순서가 보장됨                                                    │
+│   • 재생 시에도 동일한 결과                                                 │
+│                                                                             │
+│   3. Signal 순차 처리                                                       │
+│   ──────────────────                                                        │
+│   • Signal이 동시에 들어와도 순차 처리                                      │
+│   • Workflow 코드 내에서 동시성 걱정 불필요                                 │
+│                                                                             │
+│   4. Activity Task Queue                                                    │
+│   ─────────────────────                                                     │
+│   • maxConcurrentActivityExecutionSize로 동시 실행 수 제한                  │
+│   • Worker 레벨에서 처리량 제어                                             │
+│                                                                             │
+│   ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│   결론: Workflow 상태에는 락 불필요, DB 직접 접근에는 여전히 필요           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.7 Phase 3에서 확인할 것들
+
+- [ ] Workflow 내부 상태 변경과 동시성
+- [ ] Signal 처리 순서 보장 확인
+- [ ] Activity에서 DB 접근 시 락 전략
+- [ ] maxConcurrentActivityExecutionSize 설정
+- [ ] Phase 2-A 낙관적 락 코드와 비교
+
+---
+
 ## 참고 자료
 
 - [JPA 공식 문서 - Locking](https://jakarta.ee/specifications/persistence/3.0/jakarta-persistence-spec-3.0.html#a2071)
 - [Hibernate - Optimistic Locking](https://docs.jboss.org/hibernate/orm/current/userguide/html_single/Hibernate_User_Guide.html#locking-optimistic)
 - [Baeldung - Optimistic Locking in JPA](https://www.baeldung.com/jpa-optimistic-locking)
+- [Temporal - Workflow Execution](https://docs.temporal.io/workflows#workflow-execution)
 
 ---
 

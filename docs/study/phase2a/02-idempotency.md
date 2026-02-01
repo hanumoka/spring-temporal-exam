@@ -1033,11 +1033,211 @@ class IdempotencyServiceTest {
 
 ---
 
+## 10. Temporal 미리보기: 멱등성이 자동으로 보장된다
+
+> **Phase 3 예고**: 직접 구현한 멱등성 처리가 Temporal에서 어떻게 자동화되는지 살펴봅니다.
+
+### 10.1 현재 구현의 복잡성 (우리가 만든 것)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    REST 멱등성 처리 (Phase 2-A)                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   직접 구현해야 하는 것들:                                                  │
+│                                                                             │
+│   1. idempotency_keys 테이블 설계                                           │
+│   2. IdempotencyRecord 엔티티/Mapper                                        │
+│   3. Idempotency-Key 헤더 추출 로직                                         │
+│   4. 중복 요청 판별 로직 (PENDING/COMPLETED/FAILED)                         │
+│   5. 결과 캐싱 (원본 응답 저장 및 반환)                                     │
+│   6. TTL 관리 (만료된 키 정리 스케줄러)                                     │
+│   7. 동시 요청 처리 (SELECT FOR UPDATE)                                     │
+│   8. 트랜잭션 경계 관리                                                     │
+│                                                                             │
+│   예상 코드량: ~200줄 + 테이블 1개                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 Temporal의 멱등성 보장 방식
+
+```java
+/**
+ * Temporal Workflow - Workflow ID 자체가 멱등성 키!
+ */
+public class OrderController {
+
+    @PostMapping("/orders")
+    public OrderResponse createOrder(
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody OrderRequest request) {
+
+        // Workflow ID = Idempotency Key로 사용
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+            .setWorkflowId("order-" + idempotencyKey)  // 핵심!
+            .setTaskQueue("order-queue")
+            .build();
+
+        OrderWorkflow workflow = client.newWorkflowStub(
+            OrderWorkflow.class, options
+        );
+
+        // 같은 ID로 다시 호출하면?
+        // → 기존 Workflow 결과 반환 (새로 실행 안 함!)
+        return workflow.processOrder(request);
+    }
+}
+```
+
+### 10.3 Temporal이 중복 요청을 처리하는 방법
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Temporal Workflow ID 중복 방지                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   [첫 번째 요청]                                                            │
+│   POST /orders                                                              │
+│   Idempotency-Key: abc-123                                                  │
+│                  ↓                                                          │
+│   WorkflowId: "order-abc-123" 로 Workflow 시작                              │
+│                  ↓                                                          │
+│   Temporal Server에 Workflow 등록 (RUNNING 상태)                            │
+│                  ↓                                                          │
+│   처리 완료 → 결과 반환 (COMPLETED 상태)                                    │
+│                                                                             │
+│   ─────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│   [중복 요청 - 동일 키]                                                     │
+│   POST /orders                                                              │
+│   Idempotency-Key: abc-123                                                  │
+│                  ↓                                                          │
+│   WorkflowId: "order-abc-123" 로 Workflow 시작 시도                         │
+│                  ↓                                                          │
+│   ┌───────────────────────────────────────────────────────────────────┐     │
+│   │ Temporal Server 응답:                                             │     │
+│   │                                                                   │     │
+│   │ Case 1: 이미 RUNNING 상태                                         │     │
+│   │   → WorkflowExecutionAlreadyStarted 예외                          │     │
+│   │   → 기존 Workflow에 연결하여 결과 대기 가능                        │     │
+│   │                                                                   │     │
+│   │ Case 2: 이미 COMPLETED 상태                                       │     │
+│   │   → 기존 결과 조회하여 반환 가능                                   │     │
+│   │                                                                   │     │
+│   └───────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.4 Activity 레벨 멱등성
+
+```java
+/**
+ * Activity도 자동 재시도 시 멱등성 고려
+ */
+@ActivityInterface
+public interface PaymentActivity {
+    @ActivityMethod
+    PaymentResult charge(PaymentRequest request);
+}
+
+// Activity 옵션에서 재시도 설정
+ActivityOptions options = ActivityOptions.newBuilder()
+    .setStartToCloseTimeout(Duration.ofSeconds(30))
+    .setRetryOptions(RetryOptions.newBuilder()
+        .setInitialInterval(Duration.ofSeconds(1))
+        .setMaximumAttempts(3)
+        .setDoNotRetry(
+            InvalidPaymentException.class  // 이건 재시도 안 함
+        )
+        .build())
+    .build();
+
+// Temporal이 Activity 재시도할 때:
+// - 동일한 Activity ID로 재시도
+// - Activity 구현에서 멱등성만 보장하면 됨
+// - Workflow 레벨 중복은 Temporal이 처리
+```
+
+### 10.5 직접 비교: 무엇이 사라지는가?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Phase 2-A → Phase 3 비교                           │
+├────────────────────────────────┬────────────────────────────────────────────┤
+│      Phase 2-A (직접 구현)     │           Phase 3 (Temporal)               │
+├────────────────────────────────┼────────────────────────────────────────────┤
+│                                │                                            │
+│  ❌ idempotency_keys 테이블    │  ✅ 불필요 - Workflow ID가 역할 수행       │
+│                                │                                            │
+│  ❌ PENDING/COMPLETED 상태관리 │  ✅ Workflow 상태로 자동 관리              │
+│                                │                                            │
+│  ❌ SELECT FOR UPDATE 락       │  ✅ Temporal이 동시성 처리                 │
+│                                │                                            │
+│  ❌ 결과 캐싱 로직             │  ✅ Workflow History에 자동 저장           │
+│                                │                                            │
+│  ❌ TTL 만료 스케줄러          │  ✅ Workflow Retention으로 설정            │
+│                                │                                            │
+│  ❌ 헤더 추출 인터셉터         │  ✅ Controller에서 바로 Workflow ID로     │
+│                                │                                            │
+├────────────────────────────────┼────────────────────────────────────────────┤
+│  코드량: 200줄+                │  코드량: ~10줄 (옵션 설정만)               │
+│  테이블: 1개                   │  테이블: 0개                               │
+└────────────────────────────────┴────────────────────────────────────────────┘
+```
+
+### 10.6 Temporal의 Workflow ID 전략
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Workflow ID 설계 패턴                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   패턴 1: 클라이언트 제공 키 사용                                            │
+│   ─────────────────────────────                                             │
+│   WorkflowId = "order-" + request.getIdempotencyKey()                       │
+│   예: "order-abc-123-def-456"                                               │
+│                                                                             │
+│   패턴 2: 비즈니스 키 조합                                                   │
+│   ─────────────────────────                                                 │
+│   WorkflowId = "payment-" + userId + "-" + orderId                          │
+│   예: "payment-user123-order456"                                            │
+│   → 같은 사용자가 같은 주문에 중복 결제 방지                                 │
+│                                                                             │
+│   패턴 3: 날짜 + 시퀀스                                                     │
+│   ─────────────────────                                                     │
+│   WorkflowId = "batch-" + LocalDate.now() + "-daily"                        │
+│   예: "batch-2024-01-15-daily"                                              │
+│   → 하루에 한 번만 실행되는 배치 보장                                        │
+│                                                                             │
+│   ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│   WorkflowIdReusePolicy 옵션:                                               │
+│   • ALLOW_DUPLICATE_FAILED_ONLY - 실패한 경우만 재사용 허용                 │
+│   • ALLOW_DUPLICATE - 완료 후 재사용 허용                                   │
+│   • REJECT_DUPLICATE - 항상 거부 (가장 엄격)                                │
+│   • TERMINATE_IF_RUNNING - 실행 중이면 종료 후 새로 시작                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.7 Phase 3에서 확인할 것들
+
+- [ ] WorkflowOptions.setWorkflowId() 사용법
+- [ ] WorkflowIdReusePolicy 옵션별 동작 차이
+- [ ] WorkflowExecutionAlreadyStarted 예외 처리
+- [ ] 기존 Workflow 결과 조회 방법
+- [ ] Workflow Retention Period 설정
+
+---
+
 ## 참고 자료
 
 - [Stripe Idempotency](https://stripe.com/docs/api/idempotent_requests)
 - [IETF - The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)
 - [Google API Design - Idempotency](https://google.aip.dev/154)
+- [Temporal - Workflow ID](https://docs.temporal.io/workflows#workflow-id)
 
 ---
 
