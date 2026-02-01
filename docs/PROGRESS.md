@@ -3,51 +3,151 @@
 ## 현재 상태
 
 - **현재 Phase**: Phase 2-A - 동기 REST 기반 Saga
-- **마지막 업데이트**: 2026-01-30
-- **Spring Boot**: 3.5.9
-- **목표 완료일**: 2026-02-01 (일)
+- **마지막 업데이트**: 2026-02-01
+- **Spring Boot**: 3.4.0
+- **목표 완료일**: 2026-02-06 (목)
 
 ---
 
-## 집중 일정 (4일 완료 목표)
+## 집중 일정 (5일 완료 목표)
 
-> 기간: 2026-01-29 (목) ~ 2026-02-01 (일)
+> 기간: 2026-02-02 (일) ~ 2026-02-06 (목)
+> 범위: 전체 항목 (27개)
 
-### Day 1 - 1/29 (목) : Phase 1 완료
+### 완료된 사전 작업
 
-| 시간 | 항목 | 상태 |
-|------|------|------|
-| 오전 | Docker Compose 인프라 구성 | ✅ |
-| 점심 | Flyway DB 마이그레이션 | ✅ |
-| 오후 | Spring Profiles, 데이터 모델 설계 | ✅ |
-| 저녁 | 서비스 스켈레톤 생성 | ✅ |
+| Phase | 항목 | 상태 |
+|-------|------|------|
+| Phase 1 | 멀티모듈, Flyway, Profiles, Docker Compose | ✅ 완료 |
+| Phase 2-A | 문제 인식 문서 (00-problem-recognition) | ✅ 완료 |
+| Phase 2-A | Saga 패턴 이해 + 오케스트레이터 구현 | ✅ 완료 |
+| Phase 3 | Temporal 한계 문서 (03-temporal-limitations) | ✅ 완료 |
 
-### Day 2 - 1/30 (금) : Phase 2-A 전반
+---
 
-| 시간 | 항목 | 상태 |
-|------|------|------|
-| 오전 | Saga 패턴 이해, 서비스 API 설계 | ✅ |
-| 점심 | Fake PG 구현 | ⬜ |
-| 오후 | 오케스트레이터 REST 호출, 보상 트랜잭션 | ✅ |
-| 저녁 | 멱등성 처리, Resilience4j | ⬜ |
+### Day 1 - 2/2 (일) : Phase 2-A 핵심
 
-### Day 3 - 1/31 (토) : Phase 2-A 완료 + Phase 2-B
+> 목표: 분산 환경 핵심 패턴 (멱등성, 재시도, 동시성 제어)
 
-| 시간 | 항목 | 상태 |
-|------|------|------|
-| 오전 | 분산 락, **대기열+세마포어 조합**, 낙관적 락 | ⬜ |
-| 점심 | Bean Validation, 예외 처리, MDC 로깅 | ⬜ |
-| 오후 | TransactionTemplate, Redis 기초, Redis Stream | ⬜ |
-| 저녁 | Redisson, Notification 서비스, Outbox 패턴 | ⬜ |
+| 시간 | 항목 | 학습 문서 | 상태 |
+|------|------|----------|------|
+| 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015) | ⬜ |
+| 오전 | 멱등성 처리 (Idempotency Key) | 02-idempotency | ⬜ |
+| 오후 | Resilience4j (재시도/타임아웃/서킷브레이커) | 03-resilience4j | ⬜ |
+| 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ⬜ |
 
-### Day 4 - 2/1 (일) : Phase 2-B 완료 + Phase 3
+**핵심 학습 포인트**:
+- 멱등성이 재시도의 전제조건임을 이해
+- 분산 락 vs 세마포어 사용 시점 구분
 
-| 시간 | 항목 | 상태 |
-|------|------|------|
-| 오전 | OpenTelemetry/Zipkin | ⬜ |
-| 점심 | Prometheus/Grafana, Loki, Alertmanager | ⬜ |
-| 오후 | Temporal 개념 + 로컬 인프라 + Spring 연동 | ⬜ |
-| 저녁 | Workflow/Activity, Saga → Temporal 전환 | ⬜ |
+---
+
+### Day 2 - 2/3 (월) : Phase 2-A 완료
+
+> 목표: 동시성 심화 + 애플리케이션 안정성
+
+| 시간 | 항목 | 학습 문서 | 상태 |
+|------|------|----------|------|
+| 오전 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⬜ |
+| 오전 | 낙관적 락 (JPA @Version) | 05-optimistic-lock | ⬜ |
+| 오후 | Bean Validation 입력 검증 | 06-bean-validation | ⬜ |
+| 오후 | 글로벌 예외 처리 | 07-exception-handling | ⬜ |
+| 저녁 | MDC 로깅 (분산 추적 준비) | 08-mdc-logging | ⬜ |
+| 저녁 | TransactionTemplate (프로그래밍 방식) | 09-transaction-template | ⬜ |
+
+**핵심 학습 포인트**:
+- 대기열+세마포어가 Temporal Task Queue 원리와 동일
+- 낙관적 락 vs 비관적 락(분산 락) 차이
+
+---
+
+### Day 3 - 2/4 (화) : Phase 2-B 전반
+
+> 목표: Redis 심화 + 이벤트 신뢰성
+
+| 시간 | 항목 | 학습 문서 | 상태 |
+|------|------|----------|------|
+| 오전 | Redis 기초 (자료구조, 명령어) | 01-redis-basics | ⬜ |
+| 오전 | Redis Stream (Consumer Group) | 02-redis-stream | ⬜ |
+| 오후 | Redisson 심화 (Pending List, Phantom Key) | 03-redisson | ⬜ |
+| 저녁 | Outbox 패턴 (이벤트 발행 신뢰성) | 04-outbox-pattern | ⬜ |
+| 저녁 | Notification 서비스 구현 | - | ⬜ |
+
+**핵심 학습 포인트**:
+- Redis Stream이 Kafka 대안으로 어떻게 동작하는지
+- Outbox 패턴이 분산 트랜잭션을 어떻게 보완하는지
+
+---
+
+### Day 4 - 2/5 (수) : Phase 2-B 완료 (Observability)
+
+> 목표: 분산 시스템 가시성 확보
+
+| 시간 | 항목 | 학습 문서 | 상태 |
+|------|------|----------|------|
+| 오전 | OpenTelemetry + Zipkin (분산 추적) | 05-opentelemetry-zipkin | ⬜ |
+| 오후 | Prometheus + Grafana (메트릭 시각화) | 06-prometheus-grafana | ⬜ |
+| 저녁 | Loki (로그 수집) | 07-loki | ⬜ |
+| 저녁 | Alertmanager (장애 알림) | 08-alertmanager | ⬜ |
+
+**핵심 학습 포인트**:
+- 분산 환경에서 traceId로 요청 추적하는 방법
+- Grafana 대시보드로 시스템 상태 한눈에 파악
+
+---
+
+### Day 5 - 2/6 (목) : Phase 3 완료 (Temporal)
+
+> 목표: Temporal 연동 + "MSA 어려움 → Temporal 해결" 체감
+
+| 시간 | 항목 | 학습 문서 | 상태 |
+|------|------|----------|------|
+| 오전 | Temporal 핵심 개념 (Workflow, Activity, Worker) | 01-temporal-concepts | ⬜ |
+| 오전 | Temporal 로컬 인프라 구성 | 01-temporal-concepts | ⬜ |
+| 오후 | Temporal + Spring Boot 연동 | 02-temporal-spring | ⬜ |
+| 오후 | Workflow/Activity 정의 | 02-temporal-spring | ⬜ |
+| 저녁 | 기존 Saga → Temporal 전환 | 02-temporal-spring | ⬜ |
+| 저녁 | Temporal 한계 실습 (분산 락 + 멱등성 조합) | 03-temporal-limitations | ⬜ |
+
+**핵심 학습 포인트**:
+- Phase 2에서 직접 구현한 것들이 Temporal에서 어떻게 자동화되는지
+- Temporal이 해결 못하는 6가지를 Phase 2 기술로 보완
+
+---
+
+### 일정 요약
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      5일 학습 일정 요약                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Day 1 (2/2 일): Phase 2-A 핵심                                     │
+│  ├── 멱등성, Resilience4j, 분산 락                                  │
+│  └── "재시도의 전제조건" 이해                                        │
+│                                                                      │
+│  Day 2 (2/3 월): Phase 2-A 완료                                     │
+│  ├── 대기열+세마포어, 낙관적 락                                      │
+│  ├── Validation, 예외 처리, MDC, TransactionTemplate                │
+│  └── "Temporal Task Queue 원리" 이해                                │
+│                                                                      │
+│  Day 3 (2/4 화): Phase 2-B 전반                                     │
+│  ├── Redis 기초, Stream, Redisson                                   │
+│  ├── Outbox 패턴, Notification 서비스                               │
+│  └── "이벤트 신뢰성 보장" 이해                                       │
+│                                                                      │
+│  Day 4 (2/5 수): Phase 2-B 후반 (Observability)                     │
+│  ├── OpenTelemetry/Zipkin, Prometheus/Grafana                       │
+│  ├── Loki, Alertmanager                                             │
+│  └── "분산 시스템 가시성" 확보                                       │
+│                                                                      │
+│  Day 5 (2/6 목): Phase 3 (Temporal)                                 │
+│  ├── Temporal 개념 + 인프라 + Spring 연동                           │
+│  ├── Saga → Temporal 전환                                           │
+│  └── "MSA 어려움 → Temporal 해결" 체감!                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -55,7 +155,7 @@
 
 > 시간 제약이 있을 때 우선순위를 명확히 하기 위한 분류입니다.
 
-### 핵심 경로 (필수 - 16개 항목)
+### 핵심 경로 (필수 - 18개 항목)
 
 Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경로입니다.
 
@@ -67,12 +167,13 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 │  Phase 1 (전체 필수)                                                        │
 │  └── 01-gradle ~ 04-docker-compose (4개)                                    │
 │                                                                             │
-│  Phase 2-A (5개 필수)                                                       │
-│  ├── 01-saga-pattern      ← Saga 핵심 (오케스트레이션)                      │
-│  ├── 02-idempotency       ← 재시도의 전제조건                               │
-│  ├── 03-resilience4j      ← 재시도/타임아웃/서킷브레이커                    │
-│  ├── 04-distributed-lock  ← 분산 락 + 세마포어                              │
-│  └── 05-optimistic-lock   ← 낙관적 락 (@Version)                            │
+│  Phase 2-A (6개 필수)                                                       │
+│  ├── 00-problem-recognition ← MSA/EDA 문제 인식 종합 (★ 신규)              │
+│  ├── 01-saga-pattern        ← Saga 핵심 (오케스트레이션)                    │
+│  ├── 02-idempotency         ← 재시도의 전제조건                             │
+│  ├── 03-resilience4j        ← 재시도/타임아웃/서킷브레이커                  │
+│  ├── 04-distributed-lock    ← 분산 락 + 세마포어                            │
+│  └── 05-optimistic-lock     ← 낙관적 락 (@Version)                          │
 │                                                                             │
 │  Phase 2-B (3개 필수)                                                       │
 │  ├── 01-redis-basics      ← Redis 기초 (다른 주제의 전제)                   │
@@ -80,11 +181,12 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 │  └── 05-opentelemetry     ← 분산 추적 (MSA 필수)                            │
 │                                                                             │
 │  Phase 3 (전체 필수)                                                        │
-│  ├── 01-temporal-concepts ← Temporal 핵심 개념                              │
-│  └── 02-temporal-spring   ← Spring 연동 + Saga 전환                         │
+│  ├── 01-temporal-concepts   ← Temporal 핵심 개념                            │
+│  ├── 02-temporal-spring     ← Spring 연동 + Saga 전환                       │
+│  └── 03-temporal-limitations← Temporal 한계와 보완 전략 (★ 신규)           │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════    │
-│  총 16개 항목 → 이것만 해도 "MSA 어려움 → Temporal 해결" 체감 가능          │
+│  총 18개 항목 → "MSA 어려움 → Temporal 해결 + 한계 인식" 체감               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -427,17 +529,19 @@ C3: 결제 환불 ← C2: 재고 예약 취소 ← C1: 주문 취소
 ### 학습 순서 (권장)
 
 ```
-01-saga-pattern → 02-idempotency → 03-resilience4j → 04-distributed-lock
-→ 04-1-queue-semaphore → 05-optimistic-lock → 06-bean-validation
-→ 07-exception-handling → 08-mdc-logging → 09-transaction-template
+00-problem-recognition → 01-saga-pattern → 02-idempotency → 03-resilience4j
+→ 04-distributed-lock → 04-1-queue-semaphore → 05-optimistic-lock
+→ 06-bean-validation → 07-exception-handling → 08-mdc-logging → 09-transaction-template
 ```
 
+> **00-problem-recognition**: MSA/EDA의 16가지 문제와 Temporal 연결고리 이해 (학습 시작점)
 > **순서 변경 이유**: 멱등성(02)이 재시도(03)의 전제조건이므로 Resilience4j 앞에서 학습
 
 ### 진행 현황
 
 | # | 항목 | 상태 | 학습 문서 |
 |---|------|------|----------|
+| 0 | MSA/EDA 문제 인식 종합 | ✅ 완료 | 00-problem-recognition |
 | 1 | Saga 패턴 이해 + 서비스 도메인/API 설계 | ✅ 완료 | 01-saga-pattern |
 | 2 | Fake PG 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략) |
 | 3 | 오케스트레이터 REST 호출 구현 | ✅ 완료 | 01-saga-pattern |
@@ -482,6 +586,16 @@ C3: 결제 환불 ← C2: 재고 예약 취소 ← C1: 주문 취소
 
 ## Phase 3: Temporal 연동
 
+### 학습 순서 (권장)
+
+```
+01-temporal-concepts → 02-temporal-spring → 03-temporal-limitations
+```
+
+> **03-temporal-limitations**: Temporal이 해결하는 8가지 vs 해결 못하는 6가지 + 보완 전략
+
+### 진행 현황
+
 | # | 항목 | 상태 | 학습 문서 |
 |---|------|------|----------|
 | 1 | Temporal 핵심 개념 학습 | 대기 | 01-temporal-concepts |
@@ -489,6 +603,7 @@ C3: 결제 환불 ← C2: 재고 예약 취소 ← C1: 주문 취소
 | 3 | Temporal + Spring 연동 | 대기 | 02-temporal-spring |
 | 4 | Workflow/Activity 정의 | 대기 | 02-temporal-spring |
 | 5 | 기존 Saga 로직 Temporal 전환 | 대기 | 02-temporal-spring |
+| 6 | Temporal 한계와 보완 전략 | ✅ 완료 | 03-temporal-limitations |
 
 ---
 

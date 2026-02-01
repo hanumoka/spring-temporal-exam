@@ -21,6 +21,7 @@
 | D015 | 외부 서비스 시뮬레이션 | Fake 구현체 (인터페이스 기반) |
 | D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포 (최후 목표, Phase 3 완료 후) |
 | D017 | 대기열 + 세마포어 조합 | Redis Queue + RSemaphore (트래픽 폭주 대응) |
+| D018 | Temporal 보완 전략 | Phase 2 기술과 Temporal 조합 (동시성/멱등성 보완) |
 
 ---
 
@@ -975,6 +976,139 @@ spring-temporal-exam/
 ### 관련 문서
 
 - [04-1-queue-semaphore.md](../study/phase2a/04-1-queue-semaphore.md) - 대기열 + 세마포어 조합 학습
+
+---
+
+## D018. Temporal 보완 전략
+
+**결정**: Phase 2 기술과 Temporal 조합 사용 (Temporal은 만능이 아님)
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Temporal의 역할과 한계                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Temporal이 해결하는 것 - 8가지]                                    │
+│  ├── 상태 유실 → Event Sourcing                                     │
+│  ├── 자동 재시도 → Retry Policy                                     │
+│  ├── 중복 Workflow → Workflow ID 멱등성                             │
+│  ├── Saga 보상 순서 → 내장 Saga 패턴                                │
+│  ├── 순차 실행 → Workflow 내 Activity 순서 보장                     │
+│  ├── At-least-once → Activity 재시도                                │
+│  ├── 실행 이력 추적 → Event History                                 │
+│  └── 타임아웃 처리 → Activity/Workflow 타임아웃                     │
+│                                                                      │
+│  [Temporal이 해결 못하는 것 - 6가지]                                 │
+│  ├── 동시성 제어 → Workflow 외부 문제                               │
+│  ├── 외부 서비스 멱등성 → 외부 시스템 영역                          │
+│  ├── 최종 일관성 → 분산 시스템 근본 한계                            │
+│  ├── 비즈니스 로직 → 개발자 영역                                    │
+│  ├── 스키마 진화 → 데이터 영역                                      │
+│  └── 테스트 복잡성 → 도구 한계                                      │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 보완 전략 매트릭스
+
+| Temporal 미해결 문제 | 보완 기술 | Phase 2 학습 문서 |
+|---------------------|----------|------------------|
+| **동시성 제어** | 분산 락 (Redisson RLock), Atomic UPDATE | 04-distributed-lock |
+| **외부 서비스 멱등성** | Idempotency Key 패턴 | 02-idempotency |
+| **최종 일관성** | Saga 보상 + 재고 예약 패턴 | 01-saga-pattern |
+| **비즈니스 로직** | Bean Validation + 도메인 검증 | 06-bean-validation |
+| **스키마 진화** | Workflow.getVersion() + 하위 호환성 | 03-temporal-limitations |
+| **테스트 복잡성** | TestWorkflowEnvironment + Testcontainers | - |
+
+### 조합 패턴
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Activity 내 보완 기술 적용 패턴                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  @Component                                                         │
+│  public class InventoryActivitiesImpl implements InventoryActivities {
+│                                                                      │
+│      @Override                                                      │
+│      public String reserveStock(String productId, int quantity) {   │
+│          // 1. 분산 락으로 동시성 제어 (Temporal이 못 해주는 것)      │
+│          RLock lock = redisson.getLock("inventory:" + productId);   │
+│          try {                                                      │
+│              if (lock.tryLock(5, 10, TimeUnit.SECONDS)) {          │
+│                  // 2. 비즈니스 로직 검증                            │
+│                  Inventory inv = inventoryRepository.findByProductId│
+│                  if (inv.getQuantity() < quantity) {                │
+│                      throw new InsufficientStockException();        │
+│                  }                                                  │
+│                  // 3. 원자적 업데이트                               │
+│                  return doReserve(productId, quantity);             │
+│              }                                                      │
+│          } finally {                                                │
+│              lock.unlock();                                         │
+│          }                                                          │
+│      }                                                              │
+│  }                                                                  │
+│                                                                      │
+│  // Temporal의 역할: 이 Activity 실행 보장, 실패 시 재시도            │
+│  // 분산 락의 역할: 동시 요청 간 충돌 방지                           │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 핵심 인사이트
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│  "Temporal은 실행 흐름의 안정성을 제공하지만,                         │
+│   비즈니스 로직과 동시성 제어는 여전히 개발자 책임"                   │
+│                                                                      │
+│  Phase 2에서 배운 기술들은 Temporal 도입 후에도 필요하다:            │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │  Phase 2-A                    Temporal과 함께 사용          │     │
+│  │  ─────────────────────────────────────────────────────────  │     │
+│  │  분산 락 (Redisson)           Activity 내에서 동시성 제어   │     │
+│  │  멱등성 Key                   외부 API 호출 시 필수         │     │
+│  │  낙관적 락 (@Version)         DB 업데이트 충돌 감지         │     │
+│  │  Saga 보상 패턴               Temporal Saga 클래스 활용     │     │
+│  │  재고 예약 패턴               안전한 롤백 보장              │     │
+│  └────────────────────────────────────────────────────────────┘     │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 의사결정 플로우
+
+```
+문제 발생 시:
+
+Q1: 실행 흐름/상태 관리 문제?
+    ├── YES → Temporal (Workflow, Activity, Retry)
+    └── NO → Q2
+
+Q2: 동시성/Race Condition 문제?
+    ├── YES → 분산 락 또는 DB 락
+    └── NO → Q3
+
+Q3: 중복 요청/멱등성 문제?
+    ├── YES → Idempotency Key 패턴
+    └── NO → Q4
+
+Q4: 일관성/정합성 문제?
+    ├── YES → Saga + 예약 패턴 + Outbox
+    └── NO → 비즈니스 로직 검토
+```
+
+### 관련 문서
+
+| 문서 | 내용 |
+|------|------|
+| [00-problem-recognition.md](../study/phase2a/00-problem-recognition.md) | MSA/EDA 16가지 문제 인식 |
+| [03-temporal-limitations.md](../study/phase3/03-temporal-limitations.md) | Temporal 한계와 보완 전략 상세 |
 
 ---
 
