@@ -22,6 +22,13 @@
 | D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포 (최후 목표, Phase 3 완료 후) |
 | D017 | 대기열 + 세마포어 조합 | Redis Queue + RSemaphore (트래픽 폭주 대응) |
 | D018 | Temporal 보완 전략 | Phase 2 기술과 Temporal 조합 (동시성/멱등성 보완) |
+| D019 | 테스트 전략 확장 | Contract Testing + Integration Testing (테스트 다이아몬드) |
+| D020 | Saga Isolation | Semantic Lock + Reread Values 전략 적용 |
+| D021 | Redis 분산 락 심화 | 10가지 함정 대응 + Redlock 고려 |
+| D022 | 성능 테스트 | k6 기반 부하 테스트 |
+| D023 | CI/CD 파이프라인 | GitHub Actions + Docker |
+| D024 | 분산 추적 현대화 | Zipkin → Grafana Tempo 전환 고려 |
+| D025 | Virtual Threads | Spring Boot 3.5+ 활성화 |
 
 ---
 
@@ -1109,6 +1116,260 @@ Q4: 일관성/정합성 문제?
 |------|------|
 | [00-problem-recognition.md](../study/phase2a/00-problem-recognition.md) | MSA/EDA 16가지 문제 인식 |
 | [03-temporal-limitations.md](../study/phase3/03-temporal-limitations.md) | Temporal 한계와 보완 전략 상세 |
+
+---
+
+---
+
+## D019. 테스트 전략 확장
+
+**결정**: Contract Testing + Integration Testing 추가 (테스트 다이아몬드)
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    테스트 피라미드 → 테스트 다이아몬드                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [기존 - 테스트 피라미드]                                            │
+│  └── Unit Tests 많이, Integration 적게, E2E 최소                    │
+│                                                                      │
+│  [2025 트렌드 - 테스트 다이아몬드]                                   │
+│  └── Netflix, Spotify 등 MSA 선도 기업 채택                         │
+│  └── Integration + Contract Tests 중심                              │
+│  └── Unit Tests는 기반, E2E는 핵심만                                │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 테스트 유형별 도구
+
+| 유형 | 도구 | 용도 | 우선순위 |
+|------|------|------|----------|
+| **Contract Testing** | Pact, Spring Cloud Contract | 서비스 간 API 계약 검증 | 높음 |
+| **Integration Testing** | Testcontainers | DB, Redis, MQ 연동 테스트 | 높음 |
+| **Unit Testing** | JUnit 5, Mockito | 비즈니스 로직 검증 | 중간 |
+| **E2E Testing** | REST Assured | 전체 플로우 검증 | 낮음 |
+
+### Contract Testing 핵심
+
+```
+Consumer-Driven Contract:
+
+1. Consumer (Orchestrator)가 계약 정의
+   └── "Order Service는 POST /orders에 이 형식으로 응답해야 함"
+
+2. Provider (Order Service)가 계약 검증
+   └── 빌드 시 계약 충족 여부 자동 검증
+
+3. 독립 배포 가능
+   └── 계약만 지키면 서로 영향 없이 배포
+```
+
+### 관련 문서
+
+- [10-contract-testing.md](../study/phase2a/10-contract-testing.md) - Contract Testing 학습
+
+---
+
+## D020. Saga Isolation 전략
+
+**결정**: Semantic Lock + Reread Values 전략 적용
+
+### 배경
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Saga 패턴의 Isolation 문제                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [Dirty Read 문제]                                                  │
+│  ├── Saga A: 재고 100 → 90 예약 (진행 중)                            │
+│  ├── Saga B: 재고 100 읽음 (A의 변경 전 값)                          │
+│  └── Saga A 실패 롤백 → Saga B는 잘못된 데이터로 진행                │
+│                                                                      │
+│  [Lost Update 문제]                                                 │
+│  ├── Saga A: 재고 100 → 90 예약                                     │
+│  ├── Saga B: 재고 100 → 85 예약 (A 무시)                            │
+│  └── 결과: 재고 부족인데 두 주문 모두 성공                           │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 해결 전략
+
+| 전략 | 설명 | 구현 |
+|------|------|------|
+| **Semantic Lock** | 보상 가능 트랜잭션 중 "처리 중" 플래그 설정 | status = 'RESERVING' |
+| **Reread Values** | 업데이트 전 데이터 변경 여부 재확인 | version 검증 |
+| **Commutative Update** | 순서 무관하게 동일 결과 | 최종값 설정 방식 |
+
+### 관련 문서
+
+- [11-saga-isolation.md](../study/phase2a/11-saga-isolation.md) - Saga Isolation 심화
+
+---
+
+## D021. Redis 분산 락 심화 전략
+
+**결정**: 10가지 함정 대응 + Redlock 고려
+
+### 핵심 함정과 해결책
+
+| # | 함정 | 해결책 |
+|---|------|--------|
+| 1 | SETNX + EXPIRE 비원자성 | SET key value NX EX seconds |
+| 2 | Master-Slave 복제 문제 | Redlock 알고리즘 |
+| 3 | 락 조기 만료 | Watch Dog 자동 연장 |
+| 4 | 트랜잭션과 락 순서 | 커밋 후 락 해제 |
+| 5 | Clock Drift | NTP 동기화 |
+| 6 | 재진입 미지원 | Redisson RLock |
+| 7 | 소유자 미검증 해제 | UUID 검증 |
+
+### Redlock 적용 조건
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  단일 Redis: RLock 충분                                              │
+│  Redis Cluster/Sentinel: Redlock 고려                               │
+│  학습 환경: RLock + Watch Dog (현재 선택)                            │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 관련 문서
+
+- [12-redis-lock-pitfalls.md](../study/phase2a/12-redis-lock-pitfalls.md) - 분산 락 함정과 해결책
+
+---
+
+## D022. 성능 테스트 전략
+
+**결정**: k6 기반 부하 테스트
+
+### 도구 선택
+
+| 도구 | 특징 | 선택 이유 |
+|------|------|----------|
+| **k6** | JavaScript, 경량, Grafana 통합 | ✅ 현대적, CI/CD 친화적 |
+| Gatling | Scala, 상세 리포트 | 대규모 엔터프라이즈 |
+| JMeter | GUI, 범용 | QA 팀 중심 |
+
+### 테스트 시나리오
+
+```javascript
+// Saga 부하 테스트
+export const options = {
+  stages: [
+    { duration: '30s', target: 20 },   // Ramp up
+    { duration: '1m', target: 100 },   // Peak
+    { duration: '30s', target: 0 },    // Ramp down
+  ],
+};
+```
+
+### 관련 문서
+
+- [09-performance-testing.md](../study/phase2b/09-performance-testing.md) - k6 부하 테스트
+
+---
+
+## D023. CI/CD 파이프라인 전략
+
+**결정**: GitHub Actions + Docker
+
+### 파이프라인 구성
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    CI/CD 파이프라인                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  PR 생성/Push                                                        │
+│       │                                                              │
+│       ▼                                                              │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐                │
+│  │  Build  │→│  Test   │→│ Contract│→│ Security│                   │
+│  │ (Gradle)│  │(JUnit)  │  │  Test   │  │  Scan  │                  │
+│  └─────────┘  └─────────┘  └─────────┘  └─────────┘                │
+│                                              │                       │
+│                                              ▼                       │
+│                                    ┌─────────────────┐              │
+│                                    │  Docker Build   │              │
+│                                    │  + Push         │              │
+│                                    └─────────────────┘              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 보안 스캔 도구
+
+| 도구 | 용도 |
+|------|------|
+| Trivy | 컨테이너 취약점 |
+| CodeQL | 코드 보안 분석 |
+
+### 관련 문서
+
+- [01-github-actions.md](../study/devops/01-github-actions.md) - CI/CD 구축
+
+---
+
+## D024. 분산 추적 현대화
+
+**결정**: Zipkin → Grafana Tempo 전환 고려
+
+### 비교
+
+| 항목 | Zipkin | Grafana Tempo |
+|------|--------|---------------|
+| 유지보수 | 자원봉사자 | Grafana Labs |
+| 확장성 | 소규모 | 대규모 최적화 |
+| 스토리지 | 다양한 백엔드 | 객체 스토리지 (S3) |
+| 통합 | 독립적 | Grafana 스택 통합 |
+
+### 결정 근거
+
+```
+현재 스택: Prometheus + Grafana + Loki
+       → Tempo 추가 시 일관된 Observability 스택 완성
+       → 단일 Grafana UI에서 Metrics + Logs + Traces 조회
+```
+
+### 관련 문서
+
+- [05-opentelemetry-tempo.md](../study/phase2b/05-opentelemetry-tempo.md) - 분산 추적 (Tempo)
+
+---
+
+## D025. Virtual Threads 전략
+
+**결정**: Spring Boot 3.5+ Virtual Threads 활성화
+
+### 활성화 설정
+
+```yaml
+spring:
+  threads:
+    virtual:
+      enabled: true
+```
+
+### 효과
+
+| 항목 | 개선 |
+|------|------|
+| I/O 바운드 | 성능 대폭 향상 |
+| 스레드 풀 | 관리 간소화 |
+| 동시 처리 | 수만 개 동시 요청 가능 |
+
+### 주의사항
+
+```
+- synchronized 블록 주의 (pinning)
+- ThreadLocal 사용 최소화
+- 기존 스레드 풀 설정 검토 필요
+```
 
 ---
 
