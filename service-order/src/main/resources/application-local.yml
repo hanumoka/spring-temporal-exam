@@ -10,7 +10,13 @@ spring:
       ddl-auto: validate
     show-sql: true
 
-  # 로컬 개발용 상세 로깅
+  # Redis 설정 (Redisson)
+  data:
+    redis:
+      host: localhost
+      port: 21379
+
+# 로컬 개발용 상세 로깅
 logging:
   level:
     root: INFO

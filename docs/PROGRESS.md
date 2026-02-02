@@ -74,6 +74,22 @@
 Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 ```
 
+**✅ Day 1 구현 완료 내역**:
+
+| 구현 항목 | 파일 | 설명 |
+|----------|------|------|
+| PaymentGateway 인터페이스 | `service-payment/.../gateway/PaymentGateway.java` | 1단계/2단계 결제 패턴 지원 |
+| FakePaymentGateway | `service-payment/.../gateway/FakePaymentGateway.java` | 지연/실패율 시뮬레이션 |
+| @Idempotent 어노테이션 | `common/.../idempotency/Idempotent.java` | required 옵션 포함 (IETF 표준) |
+| IdempotencyService | `common/.../idempotency/IdempotencyService.java` | Redis 기반 캐시 관리 |
+| IdempotencyAspect | `common/.../idempotency/IdempotencyAspect.java` | AOP로 중복 요청 처리 |
+| HTTP 테스트 파일 | `http/idempotency-test.http` | IntelliJ HTTP Client용 |
+
+**학습 포인트 정리**:
+- Idempotency Key는 **클라이언트(FE/호출 서버)가 생성** (업계 표준)
+- `required=true`: Key 없으면 400 Bad Request (IETF 표준)
+- 결제/주문 같은 중요 API는 Key **필수**로 설정
+
 ---
 
 ### Day 2 - 2/3 (월) : Phase 2-A 심화

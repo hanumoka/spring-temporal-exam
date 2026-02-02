@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -34,7 +35,17 @@ public class IdempotencyAspect {
         String idempotencyKey = extractIdempotencyKey(idempotent.headerName());
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            // Key가 없으면 그냥 실행 (멱등성 미적용)
+            if (idempotent.required()) {
+                // Key 필수인데 없으면 400 Bad Request (IETF 표준)
+                log.warn("[Idempotency] 필수 Key 누락 - header: {}", idempotent.headerName());
+                return ResponseEntity
+                        .status(HttpStatus.BAD_REQUEST)
+                        .body(ApiResponse.fail(
+                                "IDEMPOTENCY_KEY_REQUIRED",
+                                "Idempotency Key is required. Please provide '" + idempotent.headerName() + "' header."
+                        ));
+            }
+            // Key가 선택인데 없으면 그냥 실행 (멱등성 미적용)
             log.debug("[Idempotency] Key 없음 - 일반 처리");
             return joinPoint.proceed();
         }

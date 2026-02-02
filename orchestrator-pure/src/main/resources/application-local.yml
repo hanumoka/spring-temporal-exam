@@ -1,0 +1,16 @@
+# 로컬 개발 환경 설정
+spring:
+  # Redis 설정 (Redisson - Idempotency용)
+  data:
+    redis:
+      host: localhost
+      port: 21379
+
+# 서비스 URL 설정
+services:
+  order:
+    url: http://localhost:8081
+  inventory:
+    url: http://localhost:8082
+  payment:
+    url: http://localhost:8083

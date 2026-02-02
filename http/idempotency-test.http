@@ -1,0 +1,89 @@
+### ============================================
+### Idempotency Key 테스트
+### IntelliJ에서 각 요청 옆의 ▶ 버튼 클릭하여 실행
+### ============================================
+
+### 테스트 1: 첫 번째 요청 (새 주문 생성)
+### 예상: orderId 생성, 로그에 "[Idempotency] 처리 시작 마킹" 출력
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: test-order-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### 테스트 2: 동일한 Key로 재요청 (캐시 응답)
+### 예상: 테스트 1과 동일한 orderId 반환, 로그에 "[Idempotency] 중복 요청 감지" 출력
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: test-order-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### 테스트 3: 다른 Key로 요청 (새 주문 생성)
+### 예상: 새로운 orderId 생성
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: test-order-002
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### 테스트 4: Key 없이 요청 (필수 Key 누락)
+### 예상: 400 Bad Request - "Idempotency Key is required"
+### IETF 표준: 필수로 지정된 API에서 Key 없으면 400 반환
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================
+### Fake PG 테스트
+### ============================================
+
+### PG 실패율 테스트용 (application.yml에서 failure-rate 조정 후 테스트)
+### payment.fake.failure-rate: 0.5 로 설정하면 50% 확률로 실패
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: test-pg-failure-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 50000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================
+### 개별 서비스 Health Check
+### (Actuator는 Phase 2-B에서 추가 예정)
+### ============================================
+
+### TODO: Phase 2-B에서 Actuator 의존성 추가 후 활성화
+# GET http://localhost:8081/actuator/health
+# GET http://localhost:8082/actuator/health
+# GET http://localhost:8083/actuator/health
+# GET http://localhost:8080/actuator/health
