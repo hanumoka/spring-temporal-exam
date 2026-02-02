@@ -52,7 +52,7 @@
 
 | 시간 | 항목 | 학습 문서 | 상태 |
 |------|------|----------|------|
-| 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015) | ⬜ |
+| 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015), [D026](./architecture/DECISIONS.md#d026) | ⬜ |
 | 오전 | 멱등성 처리 (Idempotency Key) | 02-idempotency | ⬜ |
 | 오후 | Resilience4j (재시도/타임아웃/서킷브레이커) | 03-resilience4j | ⬜ |
 | 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ⬜ |
@@ -60,6 +60,19 @@
 **핵심 학습 포인트**:
 - 멱등성이 재시도의 전제조건임을 이해
 - 분산 락 vs 세마포어 사용 시점 구분
+
+**⚠️ Fake PG 구현 시 주의사항** ([D026 참조](./architecture/DECISIONS.md#d026)):
+```
+현재 Saga에서 결제 승인(T3-2) = 실제 돈 인출 시점
+
+문제: T3-2 이후 실패 시 환불 처리 필요 (시간 소요, 수수료 발생 가능)
+권장: 2단계 결제 패턴 (Authorization → Capture)
+     - authorize(): 카드 홀딩 (돈 안 빠짐)
+     - capture(): 실제 청구 (Saga 완료 후)
+     - void(): 홀딩 취소 (중간 실패 시, 즉시, 무료)
+
+Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
+```
 
 ---
 

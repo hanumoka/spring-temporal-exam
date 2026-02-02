@@ -1819,6 +1819,153 @@ public class OrderSagaWorkflowImpl implements OrderSagaWorkflow {
 
 ---
 
+## 11. 결제 시점의 중요성 (PG 연동)
+
+> **핵심 인사이트**: 결제 승인 = 실제 돈 인출. Saga에서 결제 승인 후 실패하면 환불 처리가 필요합니다.
+
+### 11.1 현재 구현의 결제 시점 분석
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    현재 Saga에서 결제 시점                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  T1: 주문 생성       → Order.status = PENDING                           │
+│  T2: 재고 예약       → Inventory.reserved += quantity                   │
+│  T3-1: 결제 생성     → Payment.status = PENDING (DB만 저장)             │
+│  T3-2: 결제 승인     → Payment.status = APPROVED  ◄─── 💰 돈 빠짐       │
+│  T4: 주문 확정       → Order.status = CONFIRMED                         │
+│  T5: 재고 확정       → Inventory.quantity -= quantity                   │
+│  T6: 결제 확정       → Payment.status = CONFIRMED                       │
+│                                                                          │
+│  ⚠️ T3-2에서 돈이 빠지고, T4~T6에서 실패하면?                            │
+│     → 환불 처리 필요 (C3: refundPayment)                                 │
+│     → 환불은 즉시 되지 않음 (카드: 영업일 3~5일)                          │
+│     → 카드 취소 수수료 발생 가능                                         │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 실무 권장: 2단계 결제 패턴
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    2단계 결제 (Authorization + Capture)                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  [1단계: Authorization (인증/홀딩)]                                      │
+│  ├── 카드 유효성 확인                                                   │
+│  ├── 한도 확인                                                          │
+│  ├── 금액 "홀딩" (예약)                                                 │
+│  ├── 💵 돈 인출: ❌ 아직 안 빠짐                                         │
+│  └── 홀딩 유효기간: 보통 7일                                            │
+│                                                                          │
+│  [2단계: Capture (캡처/실제 청구)]                                       │
+│  ├── 모든 Saga 단계 완료 후 호출                                        │
+│  ├── 💵 돈 인출: ✅ 실제 청구                                            │
+│  └── 홀딩된 금액을 실제로 빼감                                          │
+│                                                                          │
+│  [중간 실패 시: Void (홀딩 취소)]                                        │
+│  ├── 환불이 아닌 "취소"                                                 │
+│  ├── 즉시 처리 (환불과 달리 시간 소요 없음)                              │
+│  └── 수수료 없음                                                        │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.3 2단계 결제 적용 시 Saga 흐름
+
+```
+현재 (1단계):
+  T3-2: approvePayment() ← 💰 돈 인출
+  T4~T6: ...
+  실패 시: refundPayment() ← 💸 환불 (3~5일)
+
+권장 (2단계):
+  T3-2: authorizePayment() ← 💳 홀딩만 (돈 안 빠짐)
+  T4~T5: ...
+  T6: capturePayment() ← 💰 실제 청구 (Saga 완료 확정 후)
+
+  중간 실패 시: voidPayment() ← ❌ 홀딩 취소 (즉시, 무료)
+```
+
+### 11.4 PG사 API 예시
+
+실제 토스페이먼츠 API 구조:
+
+```java
+// 1. 카드 인증 (Authorization)
+POST /v1/payments/card/authorize
+{
+  "orderId": "ORDER-001",
+  "amount": 50000,
+  "cardNumber": "****",
+  "authKey": "..."
+}
+// Response: { "authorizationId": "AUTH-001", ... }
+
+// 2. 결제 확정 (Capture) - Saga 완료 후
+POST /v1/payments/card/capture
+{
+  "authorizationId": "AUTH-001",
+  "amount": 50000
+}
+// Response: { "paymentKey": "PAY-001", ... }
+
+// 3. 홀딩 취소 (Void) - Saga 실패 시
+POST /v1/payments/card/void
+{
+  "authorizationId": "AUTH-001"
+}
+// 즉시 처리, 수수료 없음
+```
+
+### 11.5 Fake PG 인터페이스 설계 (Day 1 구현용)
+
+```java
+public interface PaymentGateway {
+    // 1단계 결제 (현재 구현)
+    PaymentResult approve(PaymentRequest request);
+    RefundResult refund(String transactionId);
+
+    // 2단계 결제 (확장 - 권장)
+    AuthorizationResult authorize(PaymentRequest request);  // 카드 홀딩
+    CaptureResult capture(String authorizationId);          // 실제 청구
+    VoidResult voidAuthorization(String authorizationId);   // 홀딩 취소
+}
+```
+
+### 11.6 이 프로젝트의 접근 방식
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    학습 목적 결정                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  [Phase 2-A] 현재 구현 유지 (1단계 결제)                                 │
+│  ├── "문제 체험" 목적 달성                                               │
+│  ├── 환불 보상 트랜잭션의 복잡성 경험                                    │
+│  ├── Fake PG에서 지연/실패 시뮬레이션                                    │
+│  └── 학습 후 "왜 2단계 결제가 필요한지" 체감                             │
+│                                                                          │
+│  [Fake PG 구현 시] 두 패턴 모두 테스트 가능하도록 설계                   │
+│  ├── approve() + refund() - 현재 패턴                                   │
+│  └── authorize() + capture() + void() - 권장 패턴                       │
+│                                                                          │
+│  [실무 적용 시] 2단계 결제 필수                                          │
+│  ├── 대부분의 PG사가 2단계 지원 (토스, 나이스, 카카오페이 등)            │
+│  └── Saga 중간 실패 시 깔끔한 롤백 가능                                  │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.7 관련 문서
+
+- [D026. 결제 시점 전략](../../architecture/DECISIONS.md#d026-결제-시점-전략) - 아키텍처 결정
+- [D015. Fake PG 구현](../../architecture/DECISIONS.md#d015-외부-서비스-시뮬레이션-전략) - 시뮬레이션 전략
+
+---
+
 ## 참고 자료
 
 - [Microservices.io - Saga Pattern](https://microservices.io/patterns/data/saga.html)
