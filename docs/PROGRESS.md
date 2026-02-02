@@ -54,8 +54,8 @@
 |------|------|----------|------|
 | 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015), [D026](./architecture/DECISIONS.md#d026) | ✅ 완료 |
 | 오전 | 멱등성 처리 (Idempotency Key) | 02-idempotency | ✅ 완료 |
-| 오후 | Resilience4j (재시도/타임아웃/서킷브레이커) | 03-resilience4j | ⬜ |
-| 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ⬜ |
+| 오후 | Resilience4j (재시도/타임아웃/서킷브레이커) | 03-resilience4j | ✅ 완료 |
+| 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ⏳ Day 2로 이월 |
 
 **핵심 학습 포인트**:
 - 멱등성이 재시도의 전제조건임을 이해
@@ -83,12 +83,25 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | @Idempotent 어노테이션 | `common/.../idempotency/Idempotent.java` | required 옵션 포함 (IETF 표준) |
 | IdempotencyService | `common/.../idempotency/IdempotencyService.java` | Redis 기반 캐시 관리 |
 | IdempotencyAspect | `common/.../idempotency/IdempotencyAspect.java` | AOP로 중복 요청 처리 |
-| HTTP 테스트 파일 | `http/idempotency-test.http` | IntelliJ HTTP Client용 |
+| Resilience4j 설정 | `orchestrator-pure/.../application.yml` | Retry, CircuitBreaker 설정 |
+| PaymentServiceClient | `orchestrator-pure/.../client/PaymentServiceClient.java` | @CircuitBreaker, @Retry 적용 |
+| InventoryServiceClient | `orchestrator-pure/.../client/InventoryServiceClient.java` | @CircuitBreaker, @Retry 적용 |
+| OrderServiceClient | `orchestrator-pure/.../client/OrderServiceClient.java` | @CircuitBreaker, @Retry 적용 |
+| HTTP 테스트 파일 | `http/idempotency-test.http`, `http/resilience4j-test.http` | IntelliJ HTTP Client용 |
 
 **학습 포인트 정리**:
+
+*Step 1-2 (멱등성):*
 - Idempotency Key는 **클라이언트(FE/호출 서버)가 생성** (업계 표준)
 - `required=true`: Key 없으면 400 Bad Request (IETF 표준)
 - 결제/주문 같은 중요 API는 Key **필수**로 설정
+
+*Step 3 (Resilience4j):*
+- **Retry**: 일시적 장애 자동 복구 (maxAttempts, waitDuration, exponentialBackoff)
+- **CircuitBreaker**: 연쇄 장애 방지 (CLOSED → OPEN → HALF_OPEN → CLOSED)
+- **Fallback**: 모든 재시도 실패 또는 서킷 OPEN 시 대체 처리
+- 적용 순서: CircuitBreaker → Retry → 실제 호출 (OPEN이면 재시도 없이 즉시 실패)
+- 결제 서비스는 더 민감한 설정 (failureRateThreshold=40%, waitDuration=30s)
 
 ---
 
@@ -390,7 +403,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 3 | 오케스트레이터 REST 호출 구현 | ✅ 완료 | 01-saga-pattern | |
 | 4 | 보상 트랜잭션 구현 | ✅ 완료 | 01-saga-pattern | |
 | 5 | 멱등성 처리 (Idempotency Key) | ✅ 완료 | 02-idempotency | AOP + Redis 기반 |
-| 6 | Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j | |
+| 6 | Resilience4j 재시도/타임아웃 | ✅ 완료 | 03-resilience4j | Retry + CircuitBreaker + Fallback |
 | 7 | 재고 차감 분산 락 (RLock) | 대기 | 04-distributed-lock | |
 | 8 | PG 호출 제한 세마포어 (RSemaphore) | 대기 | 04-distributed-lock | |
 | 9 | 대기열 + 세마포어 조합 (버퍼링) | 대기 | 04-1-queue-semaphore | |
