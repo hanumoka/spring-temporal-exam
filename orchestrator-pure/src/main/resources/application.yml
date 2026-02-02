@@ -13,5 +13,68 @@ logging:
   level:
     root: INFO
     com.hanumoka.orchestrator: DEBUG
+    # Resilience4j 이벤트 로깅
+    io.github.resilience4j: DEBUG
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# ============================================
+# Resilience4j 설정
+# ============================================
+resilience4j:
+
+  # 1. Retry (재시도) 설정
+  # - 일시적 장애 복구를 위한 자동 재시도
+  # - 전제조건: 멱등성이 보장되어야 함!
+  retry:
+    instances:
+      # 기본 재시도 설정 (모든 서비스 공통)
+      default:
+        maxAttempts: 3                    # 최대 시도 횟수 (첫 시도 포함)
+        waitDuration: 500ms               # 재시도 간격
+        enableExponentialBackoff: true    # 지수 백오프 활성화
+        exponentialBackoffMultiplier: 2   # 백오프 배수 (500ms → 1s → 2s)
+        retryExceptions:                  # 재시도할 예외
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - org.springframework.web.client.ResourceAccessException
+        ignoreExceptions:                 # 재시도하지 않을 예외 (비즈니스 에러)
+          - com.hanumoka.common.exception.BusinessException
+
+      # 결제 서비스 - 더 신중한 재시도 (돈이 관련됨)
+      paymentService:
+        maxAttempts: 2                    # 결제는 2회만 시도
+        waitDuration: 1s                  # 더 긴 대기
+        enableExponentialBackoff: false   # 고정 간격
+
+  # 2. TimeLimiter (타임아웃) 설정
+  # - 무한 대기 방지, 쓰레드 점유 해제
+  timelimiter:
+    instances:
+      default:
+        timeoutDuration: 3s               # 기본 타임아웃 3초
+        cancelRunningFuture: true         # 타임아웃 시 실행 중인 작업 취소
+
+      paymentService:
+        timeoutDuration: 5s               # 결제는 5초 (PG 응답 대기)
+
+  # 3. CircuitBreaker (서킷브레이커) 설정
+  # - 장애 전파 방지, 빠른 실패
+  circuitbreaker:
+    instances:
+      default:
+        registerHealthIndicator: true     # Actuator 헬스 노출
+        slidingWindowType: COUNT_BASED    # 횟수 기반 슬라이딩 윈도우
+        slidingWindowSize: 10             # 최근 10개 요청 기준
+        minimumNumberOfCalls: 5           # 최소 5회 호출 후 판단
+        failureRateThreshold: 50          # 실패율 50% 이상이면 OPEN
+        waitDurationInOpenState: 10s      # OPEN 상태 유지 시간
+        permittedNumberOfCallsInHalfOpenState: 3  # HALF_OPEN에서 허용 호출 수
+        automaticTransitionFromOpenToHalfOpen: true  # 자동 전환
+
+      # 결제 서비스 - 더 민감한 서킷브레이커
+      paymentService:
+        slidingWindowSize: 5              # 최근 5개 요청 기준
+        minimumNumberOfCalls: 3           # 최소 3회 호출 후 판단
+        failureRateThreshold: 40          # 40% 실패 시 OPEN (더 민감)
+        waitDurationInOpenState: 30s      # 30초 대기 (PG 복구 시간)

@@ -1,0 +1,141 @@
+### ============================================
+### Resilience4j 테스트
+### IntelliJ에서 각 요청 옆의 ▶ 버튼 클릭하여 실행
+### ============================================
+
+### 테스트 전 준비사항:
+### 1. Docker Compose 실행 (MySQL, Redis)
+### 2. 4개 서비스 모두 실행 (Order, Inventory, Payment, Orchestrator)
+
+### ============================================
+### 1. 정상 요청 테스트
+### ============================================
+
+### 정상 주문 요청 (모든 서비스 정상 시)
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: resilience-test-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================
+### 2. Retry 테스트 (로그에서 재시도 확인)
+### ============================================
+
+### Payment 서비스를 중지한 후 요청
+### 예상: 로그에 "[Resilience4j] 결제 승인 시도" 여러 번 출력
+### 최종: Fallback 메시지 출력
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: resilience-retry-test-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================
+### 3. CircuitBreaker 테스트
+### ============================================
+
+### CircuitBreaker 상태를 OPEN으로 만들기 위해:
+### 1. Payment 서비스를 중지
+### 2. 아래 요청을 5회 이상 실행 (각각 다른 Idempotency Key)
+### 3. 로그에서 CircuitBreaker OPEN 확인
+### 4. 이후 요청은 즉시 실패 (재시도 없이)
+
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: circuit-test-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+###
+
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: circuit-test-002
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+###
+
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: circuit-test-003
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+###
+
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: circuit-test-004
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+###
+
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: circuit-test-005
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================
+### 4. PG 실패율 테스트 (Fake PG)
+### ============================================
+
+### application.yml에서 payment.fake.failure-rate: 0.5 설정 후
+### 50% 확률로 PG 실패 → Retry 동작 확인
+POST http://localhost:8080/api/saga/order
+Content-Type: application/json
+X-Idempotency-Key: pg-failure-test-001
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 50000,
+  "paymentMethod": "CARD"
+}
+
