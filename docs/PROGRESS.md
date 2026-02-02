@@ -52,8 +52,8 @@
 
 | 시간 | 항목 | 학습 문서 | 상태 |
 |------|------|----------|------|
-| 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015), [D026](./architecture/DECISIONS.md#d026) | ⬜ |
-| 오전 | 멱등성 처리 (Idempotency Key) | 02-idempotency | ⬜ |
+| 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015), [D026](./architecture/DECISIONS.md#d026) | ✅ 완료 |
+| 오전 | 멱등성 처리 (Idempotency Key) | 02-idempotency | ✅ 완료 |
 | 오후 | Resilience4j (재시도/타임아웃/서킷브레이커) | 03-resilience4j | ⬜ |
 | 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ⬜ |
 
@@ -370,10 +370,10 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 |---|------|------|----------|------|
 | 0 | MSA/EDA 문제 인식 종합 | ✅ 완료 | 00-problem-recognition | |
 | 1 | Saga 패턴 이해 + 서비스 도메인/API 설계 | ✅ 완료 | 01-saga-pattern | |
-| 2 | Fake PG 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015) | |
+| 2 | Fake PG 구현체 작성 | ✅ 완료 | [D015](./architecture/DECISIONS.md#d015) | 1단계/2단계 결제 패턴 지원 |
 | 3 | 오케스트레이터 REST 호출 구현 | ✅ 완료 | 01-saga-pattern | |
 | 4 | 보상 트랜잭션 구현 | ✅ 완료 | 01-saga-pattern | |
-| 5 | 멱등성 처리 (Idempotency Key) | 대기 | 02-idempotency | |
+| 5 | 멱등성 처리 (Idempotency Key) | ✅ 완료 | 02-idempotency | AOP + Redis 기반 |
 | 6 | Resilience4j 재시도/타임아웃 | 대기 | 03-resilience4j | |
 | 7 | 재고 차감 분산 락 (RLock) | 대기 | 04-distributed-lock | |
 | 8 | PG 호출 제한 세마포어 (RSemaphore) | 대기 | 04-distributed-lock | |

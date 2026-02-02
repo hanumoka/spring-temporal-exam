@@ -21,3 +21,9 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+
+# Fake PG 설정
+payment:
+  fake:
+    delay-ms: 100        # PG 응답 지연 시간 (ms)
+    failure-rate: 0.0    # 실패 확률 (0.0 ~ 1.0, 테스트용)
