@@ -3,7 +3,7 @@
 ## 현재 상태
 
 - **현재 Phase**: Phase 2-A - 동기 REST 기반 Saga
-- **마지막 업데이트**: 2026-02-02
+- **마지막 업데이트**: 2026-02-03
 - **Spring Boot**: 3.5.9
 - **목표 완료일**: 2026-02-08 (토) - 7일 확장
 
@@ -55,7 +55,7 @@
 | 오전 | Fake PG 구현체 작성 | [D015](./architecture/DECISIONS.md#d015), [D026](./architecture/DECISIONS.md#d026) | ✅ 완료 |
 | 오전 | 멱등성 처리 (Idempotency Key) | 02-idempotency | ✅ 완료 |
 | 오후 | Resilience4j (재시도/타임아웃/서킷브레이커) | 03-resilience4j | ✅ 완료 |
-| 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ⏳ Day 2로 이월 |
+| 저녁 | 분산 락 (RLock) + 세마포어 (RSemaphore) | 04-distributed-lock | ➡️ Day 2로 이월 (RLock 완료) |
 
 **핵심 학습 포인트**:
 - 멱등성이 재시도의 전제조건임을 이해
@@ -111,8 +111,10 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 
 | 시간 | 항목 | 학습 문서 | 상태 |
 |------|------|----------|------|
+| 오전 | 분산 락 (RLock) + Watchdog | 04-distributed-lock | ✅ 완료 |
+| 오전 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | ⬜ |
 | 오전 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⬜ |
-| 오전 | 낙관적 락 (JPA @Version) | 05-optimistic-lock | ⬜ |
+| 오후 | 낙관적 락 (JPA @Version) | 05-optimistic-lock | ⬜ |
 | 오후 | **Saga Isolation 문제** (Dirty Read, Lost Update) | 11-saga-isolation | ⬜ |
 | 저녁 | **Redis 분산 락 10가지 함정** | 12-redis-lock-pitfalls | ⬜ |
 
@@ -120,6 +122,26 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - 대기열+세마포어가 Temporal Task Queue 원리와 동일
 - Saga 동시 실행 시 데이터 불일치 문제와 해결책
 - Redis 분산 락 프로덕션 체크리스트
+
+**✅ Day 2 구현 완료 내역**:
+
+| 구현 항목 | 파일 | 설명 |
+|----------|------|------|
+| 분산 락 헬퍼 메소드 | `service-inventory/.../service/InventoryService.java` | `executeWithLock()` - 중복 코드 제거 |
+| RLock + Watchdog | `service-inventory/.../service/InventoryService.java` | `tryLock(5, TimeUnit.SECONDS)` - 자동 락 연장 |
+| 4개 메소드 락 적용 | `service-inventory/.../service/InventoryService.java` | reserveStock, confirmReservation, cancelReservation, addStock |
+| @Transactional(timeout=30) | `service-inventory/.../service/InventoryService.java` | Watchdog 무한 락 방지 안전장치 |
+
+**학습 포인트 정리**:
+
+*Step 1 (분산 락 - RLock):*
+- **tryLock(waitTime, TimeUnit)**: leaseTime 생략 시 Watchdog 자동 활성화
+- **Watchdog**: 기본 30초 락 + 자동 연장 (10초마다 갱신)
+- **@Transactional(timeout=30)**: Watchdog 무한 락 방지 안전장치
+- **Thread.currentThread().interrupt()**: InterruptedException 후 인터럽트 플래그 복원 (graceful shutdown 지원)
+- **lock.isHeldByCurrentThread()**: 다른 스레드 락 해제 방지
+- **Runnable + Lambda**: 헬퍼 메소드로 중복 코드 제거 (`() -> { ... }`)
+- **Effectively final**: 람다에서 접근하는 변수는 재할당 불가
 
 ---
 
@@ -404,7 +426,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 4 | 보상 트랜잭션 구현 | ✅ 완료 | 01-saga-pattern | |
 | 5 | 멱등성 처리 (Idempotency Key) | ✅ 완료 | 02-idempotency | AOP + Redis 기반 |
 | 6 | Resilience4j 재시도/타임아웃 | ✅ 완료 | 03-resilience4j | Retry + CircuitBreaker + Fallback |
-| 7 | 재고 차감 분산 락 (RLock) | 대기 | 04-distributed-lock | |
+| 7 | 재고 차감 분산 락 (RLock) | ✅ 완료 | 04-distributed-lock | Watchdog + 헬퍼 메소드 |
 | 8 | PG 호출 제한 세마포어 (RSemaphore) | 대기 | 04-distributed-lock | |
 | 9 | 대기열 + 세마포어 조합 (버퍼링) | 대기 | 04-1-queue-semaphore | |
 | 10 | 낙관적 락 (JPA @Version) | 대기 | 05-optimistic-lock | |
