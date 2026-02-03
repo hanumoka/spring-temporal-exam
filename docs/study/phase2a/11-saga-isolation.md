@@ -581,6 +581,86 @@ Semantic Lock의 실제 가치:
 
 ---
 
+---
+
+## 6. 업계 표준 Countermeasures (2026-02-03 웹 검색 검증)
+
+### 6.1 Microsoft Azure Architecture Center
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Saga Pattern - Countermeasures                                  │
+│  Source: learn.microsoft.com/azure/architecture/patterns/saga   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. Semantic Lock                                               │
+│     └── "application-level lock that indicates a record is      │
+│          not committed and has potential to change"             │
+│                                                                 │
+│  2. Commutative Updates                                         │
+│     └── "Design updates to be applied in any order"             │
+│                                                                 │
+│  3. Pessimistic View                                            │
+│     └── "Reorder saga steps to minimize dirty reads"            │
+│                                                                 │
+│  4. Reread Value                                                │
+│     └── "Verify data unchanged before overwriting"              │
+│                                                                 │
+│  5. Versioning                                                  │
+│     └── "Conditional updates based on version field"            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 microservices.io (Chris Richardson)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Saga Isolation Countermeasures                                  │
+│  Source: microservices.io/patterns/data/saga.html               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  "Saga developers must use countermeasures - design techniques  │
+│   that implement isolation"                                     │
+│                                                                 │
+│  핵심 인용:                                                     │
+│  "The use of PENDING state is an example of what is known as    │
+│   a semantic lock counter-measure. It prevents another          │
+│   transaction/saga from updating the Order while it is in the   │
+│   process of being created."                                    │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 6.3 학술적 근거
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  논문: "Semantic ACID properties in multidatabases"             │
+│  저자: Lars Frank, Torben U. Zahle (1998)                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  분산 트랜잭션 없이 멀티 데이터베이스 환경에서                   │
+│  트랜잭션 격리 부족을 처리하는 방법 제시                        │
+│                                                                 │
+│  → Semantic Lock 개념의 학술적 기반                             │
+│  → Saga 패턴의 countermeasure로 널리 인용됨                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 6.4 현재 프로젝트와의 매핑
+
+| 업계 표준 Countermeasure | 현재 프로젝트 구현 | 상태 |
+|-------------------------|-------------------|------|
+| Semantic Lock | `ReservationStatus` + `sagaId` | ⬜ 구현 예정 |
+| Versioning | `@Version` 필드 | ✅ 구현됨 |
+| Reread Value | RLock 내부에서 조회 | ✅ 구현됨 |
+| Commutative Updates | `reservedQuantity` 증감 | ✅ 구현됨 |
+| Pessimistic View | 해당 없음 | - |
+
+---
+
 ## 관련 문서
 
 - [D020 Saga Isolation](../../architecture/DECISIONS.md#d020-saga-isolation-전략)
@@ -588,3 +668,4 @@ Semantic Lock의 실제 가치:
 - [04-distributed-lock.md](./04-distributed-lock.md)
 - [04-2-lock-strategy.md](./04-2-lock-strategy.md) - 락 전략 통합 가이드
 - [05-optimistic-lock.md](./05-optimistic-lock.md)
+- [12-redis-lock-pitfalls.md](./12-redis-lock-pitfalls.md) - Redis 락 함정

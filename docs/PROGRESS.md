@@ -114,14 +114,15 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | 1 | 분산 락 (RLock) + Watchdog | 04-distributed-lock | 필수 | ✅ 완료 |
 | 2 | **Saga Isolation 핵심** (Dirty Read, Lost Update) | 11-saga-isolation, 04-2-lock-strategy | 필수 | ✅ 완료 |
 | 3 | 낙관적 락 (JPA @Version) - Lost Update 해결 | 05-optimistic-lock | 필수 | ⬜ |
-| 4 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ⬜ |
-| 5 | Redis Lock 핵심 함정 (요약) | 12-redis-lock-pitfalls | 필수 | ⬜ |
-| 6 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⭐선택 | ⬜ |
+| 4 | Semantic Lock 구현 | 04-2-lock-strategy | 필수 | ⬜ |
+| 5 | **Redis Lock 핵심 함정** ★ 보강 | 12-redis-lock-pitfalls | 필수 | ⬜ |
+| 6 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ⬜ |
+| 7 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⭐선택 | ⬜ |
 
 **🔄 순서 변경 이유**:
 ```
 기존: 분산락 → 세마포어 → 대기열 → 낙관적락 → Saga Isolation → 함정
-개선: 분산락 → Saga Isolation(문제인식) → 낙관적락(해결책) → 세마포어 → 함정
+개선: 분산락 → Saga Isolation(문제인식) → 낙관적락 → Semantic Lock → 함정 → 세마포어
 
 "왜 락이 필요한가?" 를 먼저 이해한 후 구현으로 진행
 ```
@@ -130,7 +131,9 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - **Saga는 ACD만 보장** (Isolation 없음) - 이 한계가 락 필요성의 근거
 - 낙관적 락(@Version)으로 Lost Update 해결
 - 분산 락(RLock)으로 다중 인스턴스 환경 해결
+- Semantic Lock으로 빠른 응답 + 정보 제공
 - 세마포어로 외부 API 동시 호출 제한
+- **@Transactional + RLock 순서 주의** (핵심 함정)
 
 **✅ Day 2 구현 완료 내역**:
 
@@ -167,6 +170,14 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
   - RLock: 동시 접근 차단 (물리적)
   - Semantic Lock: 작업 중 정보 제공 (논리적)
   - @Version: 충돌 감지 (최후 방어선)
+- **업계 표준 일치 확인** (2026-02-03 웹 검색 검증):
+  - Microsoft Azure Architecture: Semantic Lock = "application-level lock" countermeasure
+  - microservices.io: Versioning, Reread Value, Semantic Lock 모두 표준 countermeasure
+  - 학술 근거: 1998년 Lars Frank & Torben Zahle 논문
+- **단일 Redis vs Redlock 판단**:
+  - 현재: 단일 Redis + @Version (적절)
+  - 이유: "효율성" 목적 (중복 방지), @Version이 최후 방어선
+  - Redlock 필요 시: 금융 거래 등 "정확성" 필수 케이스
 
 **📊 Day 2 현재 구현 상태 분석** (2026-02-03 기준):
 
@@ -179,7 +190,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | Semantic Lock 필드 | Inventory 엔티티 | ❌ 없음 | reservationStatus, sagaId 추가 필요 |
 | 세마포어 | PaymentService | ❌ 없음 | PG 호출 제한 필요 |
 
-**🔧 Day 2 남은 구현 작업**:
+**🔧 Day 2 남은 구현 작업**: (2026-02-03 웹 검색 검증 후 재조정)
 
 *Step 3 (낙관적 락 @Version):*
 - @Version 필드는 **이미 구현됨** (Inventory, Order, Payment 엔티티)
@@ -203,7 +214,24 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
    - sagaId 생성 및 전달 로직 추가
 ```
 
-*Step 5 (세마포어 구현 계획):*
+*Step 5 (Redis Lock 핵심 함정 - 보강됨):* ★ 중요
+```
+웹 검색 결과 발견된 핵심 함정 추가:
+
+1. @Transactional + RLock 순서 문제 (★ 핵심)
+   - Spring AOP가 트랜잭션을 먼저 시작
+   - 락 해제 시점에 트랜잭션이 아직 커밋되지 않음
+   - 해결: 락을 트랜잭션 밖에서 관리 (방법 1 권장)
+   - 현재 코드: @Version이 방어하지만 개선 권장
+
+2. 단일 Redis vs Redlock 판단 근거
+   - 효율성 목적: 단일 Redis + @Version (현재)
+   - 정확성 목적: Redlock 또는 Zookeeper/etcd
+
+3. 기존 10가지 함정 요약 학습
+```
+
+*Step 6 (세마포어 구현 계획):*
 ```
 1. PaymentService에 RSemaphore 적용:
    - semaphore:pg 키로 동시 10개 PG 호출 제한
@@ -341,9 +369,10 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 │  ├── 멱등성, Resilience4j, 분산 락(RLock)                                   │
 │  └── "재시도의 전제조건" 이해                                                │
 │                                                                             │
-│  Day 2 (2/3 월): Phase 2-A 심화 ★ 순서 재조정                               │
-│  ├── [필수] Saga Isolation → 낙관적 락 → 세마포어 → Lock 함정               │
+│  Day 2 (2/3 월): Phase 2-A 심화 ★ 순서 재조정 + 웹 검색 검증                │
+│  ├── [필수] Saga Isolation → 낙관적 락 → Semantic Lock → Lock 함정 → 세마포어│
 │  ├── 핵심: "락이 왜 필요한가?" 문제 인식 후 해결책 구현                      │
+│  ├── 검증: 웹 검색으로 업계 표준 일치 확인 (Microsoft, microservices.io)    │
 │  └── [선택] 대기열+세마포어 조합 (시간 여유 시)                              │
 │                                                                             │
 │  Day 3 (2/4 화): Phase 2-A 완료 + 테스트 ★ 필수/선택 구분                   │

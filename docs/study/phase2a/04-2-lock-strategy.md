@@ -518,8 +518,165 @@ public void acquireLock(String sagaId) {
 
 ---
 
+## 11. 업계 표준과의 일치 확인
+
+웹 검색 결과, 현재 전략이 업계 표준과 잘 일치합니다.
+
+### 11.1 Microsoft Azure Architecture Center
+
+```
+[Saga Pattern - Countermeasures]
+
+"Semantic Lock is an application-level lock, in which saga's
+compensable transactions set a flag indicating that the record
+is not committed and has potential to change."
+
+→ 현재 전략의 Semantic Lock과 동일한 개념
+```
+
+Source: https://learn.microsoft.com/en-us/azure/architecture/patterns/saga
+
+### 11.2 microservices.io (Chris Richardson)
+
+```
+[Saga Pattern - Countermeasures]
+
+1. Semantic Lock: PENDING 상태 플래그 설정
+2. Commutative Updates: 순서 무관한 업데이트 설계
+3. Pessimistic View: 데이터 업데이트 순서 재조정
+4. Reread Value: 업데이트 전 값 재확인
+5. Versioning: @Version으로 조건부 업데이트
+
+→ 현재 전략이 1, 4, 5를 포함
+```
+
+Source: https://microservices.io/patterns/data/saga.html
+
+### 11.3 학술적 근거
+
+```
+1998 논문: "Semantic ACID properties in multidatabases
+using remote procedure calls and update propagations"
+- 저자: Lars Frank, Torben U. Zahle
+
+멀티 데이터베이스 아키텍처에서 분산 트랜잭션 없이
+트랜잭션 격리 부족을 처리하는 방법 제시
+
+→ Semantic Lock 개념의 학술적 기반
+```
+
+---
+
+## 12. 단일 Redis vs Redlock 판단
+
+### 12.1 Martin Kleppmann의 분석
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  "How to do distributed locking" (Martin Kleppmann, 2016)       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  분산 락의 두 가지 목적:                                        │
+│                                                                 │
+│  1. 효율성 (Efficiency)                                         │
+│     └── 중복 작업 방지가 목적                                   │
+│     └── 가끔 락이 실패해도 괜찮음                               │
+│     └── 단일 Redis + @Version 충분                              │
+│                                                                 │
+│  2. 정확성 (Correctness)                                        │
+│     └── 절대 두 클라이언트가 동시에 작업하면 안 됨              │
+│     └── 금융 트랜잭션 등 중요한 경우                            │
+│     └── Redlock 또는 Zookeeper/etcd 권장                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Source: https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
+
+### 12.2 이 프로젝트의 선택
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  현재 프로젝트: 단일 Redis + @Version (적절함 ✅)               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  선택 이유:                                                     │
+│                                                                 │
+│  1. 목적이 "효율성"                                             │
+│     └── 재고 예약 중복 방지                                     │
+│     └── 가끔 중복이 발생해도 @Version이 감지                    │
+│                                                                 │
+│  2. @Version이 최후 방어선                                      │
+│     └── RLock 실패해도 OptimisticLockException 발생             │
+│     └── 재시도로 복구 가능                                      │
+│                                                                 │
+│  3. 인프라 단순화                                               │
+│     └── Redis 클러스터 불필요                                   │
+│     └── 운영 복잡도 감소                                        │
+│                                                                 │
+│  Redlock이 필요한 경우:                                         │
+│  └── 금융 거래, 결제 중복 방지 등 "정확성" 필수 시              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 13. TCC 패턴과의 비교
+
+### 13.1 Saga vs TCC
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Saga vs TCC (Try-Confirm-Cancel)                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Saga 패턴 (현재 사용):                                         │
+│  ├── 실제 작업 수행 → 실패 시 보상 트랜잭션                     │
+│  ├── "일단 하고, 실패하면 되돌리기"                             │
+│  └── 예: 재고 감소 → 실패 시 재고 복구                          │
+│                                                                 │
+│  TCC 패턴:                                                      │
+│  ├── Try: 임시 예약 (확정 아님)                                 │
+│  ├── Confirm: 모든 Try 성공 시 확정                             │
+│  ├── Cancel: 실패 시 취소 (작업 자체가 없었던 것처럼)           │
+│  └── 예: 재고 홀딩 → 성공 시 확정 / 실패 시 해제                │
+│                                                                 │
+│  핵심 차이:                                                     │
+│  ├── Saga: "되돌리기" (undo)                                    │
+│  └── TCC: "아직 안 함 → 확정/취소" (reserve → commit/rollback)  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 13.2 현재 구현과의 관계
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  현재 구현은 TCC와 유사한 구조                                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Inventory 엔티티:                                              │
+│  ├── quantity: 전체 재고                                        │
+│  └── reservedQuantity: 예약된 수량 (홀딩)                       │
+│                                                                 │
+│  흐름:                                                          │
+│  ├── reserve(): reservedQuantity 증가 (Try)                     │
+│  ├── confirmReservation(): reservedQuantity 확정 (Confirm)      │
+│  └── cancelReservation(): reservedQuantity 해제 (Cancel)        │
+│                                                                 │
+│  Semantic Lock의 RESERVING 상태:                                │
+│  └── TCC의 "Try 상태"와 개념적으로 동일                         │
+│  └── "아직 확정되지 않음"을 명시적으로 표현                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## 관련 문서
 
 - [04-distributed-lock.md](./04-distributed-lock.md) - RLock 상세
 - [05-optimistic-lock.md](./05-optimistic-lock.md) - 낙관적 락 상세
 - [11-saga-isolation.md](./11-saga-isolation.md) - Saga Isolation 문제
+- [12-redis-lock-pitfalls.md](./12-redis-lock-pitfalls.md) - Redis 락 함정

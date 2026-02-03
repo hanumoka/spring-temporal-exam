@@ -180,17 +180,19 @@ try {
 
 ---
 
-## 함정 4: 트랜잭션과 락 순서 문제
+## 함정 4: 트랜잭션과 락 순서 문제 ★ 핵심 함정
 
-### 문제
+> **중요**: 이 함정은 Spring + JPA 환경에서 가장 흔하게 발생하는 문제입니다.
+
+### 문제 상황
 
 ```java
-@Transactional
+@Transactional  // ← Spring AOP가 먼저 트랜잭션 시작
 public void processOrder(Long productId, int quantity) {
     RLock lock = redissonClient.getLock("lock:inventory:" + productId);
 
     try {
-        lock.lock();
+        lock.lock();  // ← 트랜잭션 시작 "후"에 락 획득
 
         // 재고 차감
         Inventory inv = inventoryRepository.findById(productId).get();
@@ -198,78 +200,229 @@ public void processOrder(Long productId, int quantity) {
         inventoryRepository.save(inv);
 
     } finally {
-        lock.unlock();  // ⚡ 락 해제
+        lock.unlock();  // ⚡ 락 해제 (하지만 트랜잭션은 아직 커밋 전!)
     }
-    // 트랜잭션 커밋은 메서드 종료 후!
+    // 트랜잭션 커밋은 메서드 "완전히" 종료 후!
 }
 ```
 
+### Spring AOP 동작 순서 (핵심!)
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    트랜잭션 < 락 범위 문제                           │
+│                    Spring AOP 실행 순서                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  호출: processOrder(productId, quantity)                            │
+│         │                                                            │
+│         ▼                                                            │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Spring TransactionInterceptor (AOP)                         │    │
+│  │  ┌───────────────────────────────────────────────────────┐  │    │
+│  │  │  1. BEGIN TRANSACTION                                  │  │    │
+│  │  │  2. 실제 메서드 호출 ─────────────────────────────────│──┼───▶│
+│  │  │  3. (메서드 내부에서 락 획득/해제)                    │  │    │
+│  │  │  4. 메서드 리턴                                        │  │    │
+│  │  │  5. COMMIT TRANSACTION  ◀─ 락 해제 "후"에 커밋!       │  │    │
+│  │  └───────────────────────────────────────────────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  문제: 락 해제(4)와 커밋(5) 사이에 갭 존재!                         │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 실제 발생하는 문제
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Dirty Read 발생 시나리오                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  시간  │  Thread A                    │  Thread B                   │
 │  ──────┼──────────────────────────────┼──────────────────────────── │
 │  T1    │  @Transactional 시작         │                             │
 │  T2    │  락 획득                      │                             │
-│  T3    │  재고 100 → 90 변경          │                             │
-│  T4    │  락 해제                      │  락 획득                    │
-│  T5    │  (커밋 전)                   │  재고 읽기: 100 (커밋 전!)  │
-│  T6    │  커밋: 90 저장               │  재고 90 → 80 변경          │
-│  T7    │                              │  커밋: 80 저장              │
+│  T3    │  재고 읽기: 100              │                             │
+│  T4    │  재고 변경: 100 → 90         │                             │
+│  T5    │  락 해제 ⚡                  │  락 획득                    │
+│  T6    │  (커밋 대기 중...)           │  재고 읽기: 100 ◀── 아직 90│
+│  T7    │  커밋 완료: 90               │                    이 아님! │
+│  T8    │                              │  재고 변경: 100 → 85       │
+│  T9    │                              │  락 해제                    │
+│  T10   │                              │  커밋: 85                   │
 │  ──────┼──────────────────────────────┼──────────────────────────── │
 │                                                                      │
-│  결과: 정상 (80)                                                     │
-│  BUT: Thread B가 커밋 전 값을 읽을 수 있는 타이밍 존재               │
+│  기대 결과: 100 - 10 - 15 = 75                                       │
+│  실제 결과: 85 (Thread A의 변경 손실!)                               │
+│                                                                      │
+│  원인: Thread B가 락을 획득했지만 Thread A의 커밋 전 값을 읽음       │
+│        → Dirty Read는 아니지만 Lost Update 발생                      │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### @Version이 있으면 감지됨 (최후 방어선)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    @Version으로 방어                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Thread A: version=1 읽음 → 변경 → UPDATE WHERE version=1 → 성공    │
+│  Thread B: version=1 읽음 → 변경 → UPDATE WHERE version=1 → 실패!   │
+│                                               ↑                      │
+│                                          이미 version=2             │
+│                                                                      │
+│  → OptimisticLockException 발생 → 재시도                            │
+│                                                                      │
+│  BUT: @Version이 없다면 데이터 손실!                                │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 해결책
 
+#### 방법 1: 락을 트랜잭션 밖에서 관리 (권장 ✅)
+
 ```java
-// 방법 1: 트랜잭션 범위 밖에서 락 관리
+// 외부 메서드 (트랜잭션 없음)
 public void processOrderSafe(Long productId, int quantity) {
     RLock lock = redissonClient.getLock("lock:inventory:" + productId);
 
     try {
-        lock.lock();
+        lock.lock();  // 락 먼저 획득
 
-        // 트랜잭션 내부에서 처리
-        doProcessOrder(productId, quantity);
+        doProcessOrder(productId, quantity);  // 트랜잭션 내부 처리
 
-        // 트랜잭션 커밋 후 락 해제
+        // 트랜잭션 커밋 완료 후 여기로 돌아옴 → 락 해제
     } finally {
         lock.unlock();
     }
 }
 
-@Transactional
+@Transactional  // 별도 메서드로 트랜잭션 분리
 protected void doProcessOrder(Long productId, int quantity) {
     Inventory inv = inventoryRepository.findById(productId).get();
     inv.decrease(quantity);
     inventoryRepository.save(inv);
+    // 메서드 종료 시 자동 커밋
 }
+```
 
-// 방법 2: TransactionSynchronization 사용
+```
+실행 순서:
+1. lock.lock()               ← 락 획득
+2. doProcessOrder() 호출
+   2-1. BEGIN TRANSACTION
+   2-2. DB 작업
+   2-3. COMMIT               ← 커밋 완료
+3. lock.unlock()             ← 커밋 후 락 해제 ✅
+```
+
+#### 방법 2: TransactionSynchronization 사용
+
+```java
 @Transactional
 public void processOrderWithSync(Long productId, int quantity) {
     RLock lock = redissonClient.getLock("lock:inventory:" + productId);
     lock.lock();
 
-    // 트랜잭션 커밋 후 락 해제
+    // 트랜잭션 커밋 "후"에 락 해제하도록 등록
     TransactionSynchronizationManager.registerSynchronization(
         new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                lock.unlock();
+                lock.unlock();  // 커밋 완료 후 실행
+            }
+
+            @Override
+            public void afterCompletion(int status) {
+                // 롤백 시에도 락 해제 필요
+                if (status == STATUS_ROLLED_BACK && lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
             }
         }
     );
 
     Inventory inv = inventoryRepository.findById(productId).get();
     inv.decrease(quantity);
+}
+```
+
+#### 방법 3: TransactionTemplate 사용 (프로그래밍 방식)
+
+```java
+private final TransactionTemplate transactionTemplate;
+
+public void processOrderWithTemplate(Long productId, int quantity) {
+    RLock lock = redissonClient.getLock("lock:inventory:" + productId);
+
+    try {
+        lock.lock();
+
+        // 트랜잭션을 명시적으로 제어
+        transactionTemplate.execute(status -> {
+            Inventory inv = inventoryRepository.findById(productId).get();
+            inv.decrease(quantity);
+            inventoryRepository.save(inv);
+            return null;
+        });
+        // execute() 완료 = 커밋 완료
+
+    } finally {
+        lock.unlock();  // 커밋 후 락 해제
+    }
+}
+```
+
+#### 현재 프로젝트 상태 분석
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    현재 InventoryService 분석                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  @Transactional(timeout = 30)                                       │
+│  public void reserveStock(Long productId, int quantity) {           │
+│      executeWithLock(productId, () -> {                             │
+│          Inventory inventory = getInventory(productId);             │
+│          inventory.reserve(quantity);                               │
+│      });                                                            │
+│  }                                                                  │
+│                                                                      │
+│  문제: @Transactional이 메서드 전체를 감싸고,                       │
+│        executeWithLock 내부에서 락 획득/해제                        │
+│        → 락 해제 후 커밋되는 구조                                   │
+│                                                                      │
+│  현재 안전한 이유:                                                  │
+│  └── @Version 필드가 있어서 Lost Update 감지됨                      │
+│  └── 하지만 "방법 1"로 개선하면 더 안전                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### 권장 개선 방향
+
+```java
+// 현재 (문제 있을 수 있음)
+@Transactional(timeout = 30)
+public void reserveStock(Long productId, int quantity) {
+    executeWithLock(productId, () -> { ... });
+}
+
+// 개선안 (방법 1 적용)
+public void reserveStock(Long productId, int quantity) {
+    executeWithLock(productId, () -> {
+        reserveStockInternal(productId, quantity);
+    });
+}
+
+@Transactional
+protected void reserveStockInternal(Long productId, int quantity) {
+    Inventory inventory = getInventory(productId);
+    inventory.reserve(quantity);
 }
 ```
 
