@@ -168,6 +168,51 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
   - Semantic Lock: 작업 중 정보 제공 (논리적)
   - @Version: 충돌 감지 (최후 방어선)
 
+**📊 Day 2 현재 구현 상태 분석** (2026-02-03 기준):
+
+| 항목 | 위치 | 상태 | 비고 |
+|------|------|------|------|
+| RLock + Watchdog | InventoryService | ✅ 완료 | executeWithLock() 헬퍼 |
+| @Version 필드 | Inventory, Order, Payment 엔티티 | ✅ 있음 | 낙관적 락 구현됨 |
+| Resilience4j | 각 ServiceClient | ✅ 완료 | Retry + CircuitBreaker |
+| 멱등성 | IdempotencyService | ✅ 완료 | Redis 기반 |
+| Semantic Lock 필드 | Inventory 엔티티 | ❌ 없음 | reservationStatus, sagaId 추가 필요 |
+| 세마포어 | PaymentService | ❌ 없음 | PG 호출 제한 필요 |
+
+**🔧 Day 2 남은 구현 작업**:
+
+*Step 3 (낙관적 락 @Version):*
+- @Version 필드는 **이미 구현됨** (Inventory, Order, Payment 엔티티)
+- **학습/검증 필요**: OptimisticLockException 처리, 재시도 로직
+
+*Step 4 (Semantic Lock 구현 계획):*
+```
+1. Flyway 마이그레이션 추가:
+   - V4__add_semantic_lock_fields.sql
+   - reservation_status, saga_id, lock_acquired_at 컬럼
+
+2. Inventory 엔티티 수정:
+   - ReservationStatus enum (AVAILABLE, RESERVING, RESERVED)
+   - acquireLock(), releaseLock(), validateSagaOwnership() 메소드
+
+3. InventoryService 수정:
+   - reserveStock(productId, quantity, sagaId) - sagaId 파라미터 추가
+   - confirmReservation, cancelReservation에 sagaId 검증 추가
+
+4. InventoryServiceClient + Orchestrator:
+   - sagaId 생성 및 전달 로직 추가
+```
+
+*Step 5 (세마포어 구현 계획):*
+```
+1. PaymentService에 RSemaphore 적용:
+   - semaphore:pg 키로 동시 10개 PG 호출 제한
+   - tryAcquire(5, TimeUnit.SECONDS) 패턴
+
+2. PaymentThrottledException 추가:
+   - PG 호출 제한 초과 시 예외
+```
+
 ---
 
 ### Day 3 - 2/4 (화) : Phase 2-A 완료 + 테스트 ★ 필수/선택 구분
