@@ -112,7 +112,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | 순서 | 항목 | 학습 문서 | 구분 | 상태 |
 |------|------|----------|------|------|
 | 1 | 분산 락 (RLock) + Watchdog | 04-distributed-lock | 필수 | ✅ 완료 |
-| 2 | **Saga Isolation 핵심** (Dirty Read, Lost Update) | 11-saga-isolation | 필수 | ⬜ |
+| 2 | **Saga Isolation 핵심** (Dirty Read, Lost Update) | 11-saga-isolation, 04-2-lock-strategy | 필수 | ✅ 완료 |
 | 3 | 낙관적 락 (JPA @Version) - Lost Update 해결 | 05-optimistic-lock | 필수 | ⬜ |
 | 4 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ⬜ |
 | 5 | Redis Lock 핵심 함정 (요약) | 12-redis-lock-pitfalls | 필수 | ⬜ |
@@ -140,6 +140,8 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | RLock + Watchdog | `service-inventory/.../service/InventoryService.java` | `tryLock(5, TimeUnit.SECONDS)` - 자동 락 연장 |
 | 4개 메소드 락 적용 | `service-inventory/.../service/InventoryService.java` | reserveStock, confirmReservation, cancelReservation, addStock |
 | @Transactional(timeout=30) | `service-inventory/.../service/InventoryService.java` | Watchdog 무한 락 방지 안전장치 |
+| 락 전략 통합 가이드 | `docs/study/phase2a/04-2-lock-strategy.md` | RLock + Semantic Lock + @Version 관계 정리 |
+| Saga Isolation 문서 보강 | `docs/study/phase2a/11-saga-isolation.md` | Semantic Lock 실제 가치 섹션 추가 |
 
 **학습 포인트 정리**:
 
@@ -151,6 +153,20 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - **lock.isHeldByCurrentThread()**: 다른 스레드 락 해제 방지
 - **Runnable + Lambda**: 헬퍼 메소드로 중복 코드 제거 (`() -> { ... }`)
 - **Effectively final**: 람다에서 접근하는 변수는 재할당 불가
+
+*Step 2 (Saga Isolation + 락 전략):*
+- **RLock 범위 설계가 핵심**: Saga 전체 vs 각 단계만
+- **선택 A (RLock 전체)**: 단순하지만 블로킹 대기 (3초+), Semantic Lock 불필요
+- **선택 B (RLock 최소)**: 빠른 응답, Semantic Lock 필요
+- **Semantic Lock**: RLock이 없는 구간을 보호하기 위한 보완책
+  - 처리량 향상 X, 빠른 응답 O, 비즈니스 로직 적용 O
+  - "재고 부족" vs "다른 주문 처리 중" 정보 구분 가능
+  - 반드시 RLock 안에서 설정/해제
+- **낙관적 락 (@Version)**: RLock 실패 시 최후 방어선
+- **세 가지 락의 역할**:
+  - RLock: 동시 접근 차단 (물리적)
+  - Semantic Lock: 작업 중 정보 제공 (논리적)
+  - @Version: 충돌 감지 (최후 방어선)
 
 ---
 
