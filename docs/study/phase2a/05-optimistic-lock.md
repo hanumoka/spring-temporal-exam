@@ -9,6 +9,99 @@
 
 ---
 
+## 📊 현재 프로젝트 구현 상태 (2026-02-03 코드 검토)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  구현 상태 요약                                                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  [✅ 이미 구현됨]                                               │
+│  ├── @Version 필드                                              │
+│  │   ├── Inventory.java:33-34                                  │
+│  │   ├── Order.java:37-38                                      │
+│  │   └── Payment.java (있음)                                   │
+│  │                                                              │
+│  ├── OptimisticLockTest.java                                   │
+│  │   └── service-inventory/src/test/java/.../OptimisticLockTest│
+│  │   └── 동시 수정 시 예외 발생 테스트 완성                     │
+│  │                                                              │
+│  └── SQL 로그 설정                                              │
+│      └── application-local.yml (show-sql: true)                │
+│                                                                 │
+│  [❌ 구현 필요]                                                  │
+│  └── GlobalExceptionHandler.java                               │
+│      ├── 위치: common/.../exception/                           │
+│      ├── ObjectOptimisticLockingFailureException 처리 (409)    │
+│      ├── BusinessException 처리 (400)                          │
+│      └── 현재 예외 발생 시 Spring 기본 500 에러 반환            │
+│                                                                 │
+│  [확인 필요]                                                     │
+│  ├── Docker Compose 실행 후 테스트 실행                         │
+│  └── SQL 로그에서 WHERE version=? 조건 확인                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 테스트 실행 방법
+
+```bash
+# 1. Docker Compose 실행 (MySQL + Redis 필요)
+docker-compose up -d
+
+# 2. 테스트 실행
+./gradlew :service-inventory:test --tests "OptimisticLockTest"
+```
+
+### GlobalExceptionHandler 생성 가이드
+
+**파일 생성**: `common/src/main/java/com/hanumoka/common/exception/GlobalExceptionHandler.java`
+
+```java
+package com.hanumoka.common.exception;
+
+import com.hanumoka.common.dto.ApiResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+@RestControllerAdvice
+@Slf4j
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e) {
+        log.warn("비즈니스 예외: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(e.getErrorInfo()));
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLock(
+            ObjectOptimisticLockingFailureException e) {
+        log.warn("낙관적 락 충돌: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail("CONFLICT", "다른 요청이 먼저 처리되었습니다."));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
+        log.error("예상치 못한 예외: ", e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.fail(ErrorCode.INTERNAL_ERROR.toErrorInfo()));
+    }
+}
+```
+
+**주의**: common 모듈의 `@RestControllerAdvice`가 다른 모듈에서 스캔되려면:
+- 각 서비스 Application에 `@ComponentScan(basePackages = {"com.hanumoka.xxx", "com.hanumoka.common.exception"})` 추가
+- 또는 각 서비스 모듈에 개별 ExceptionHandler 생성
+
+---
+
 ## 1. 낙관적 락 vs 비관적 락
 
 ### 비관적 락 (Pessimistic Lock)
