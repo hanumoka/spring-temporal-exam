@@ -113,17 +113,19 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 |------|------|----------|------|------|
 | 1 | 분산 락 (RLock) + Watchdog | 04-distributed-lock | 필수 | ✅ 완료 |
 | 2 | **Saga Isolation 핵심** (Dirty Read, Lost Update) | 11-saga-isolation, 04-2-lock-strategy | 필수 | ✅ 완료 |
-| 3 | 낙관적 락 (@Version) + GlobalExceptionHandler | 05-optimistic-lock | 필수 | 🔄 진행중 |
+| 3 | 낙관적 락 (@Version) + GlobalExceptionHandler | 05-optimistic-lock | 필수 | ✅ 완료 |
 | 4 | Semantic Lock 구현 | 04-2-lock-strategy | 필수 | ⬜ |
 | 5 | **Redis Lock 핵심 함정** ★ 보강 | 12-redis-lock-pitfalls | 필수 | ⬜ |
 | 6 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ⬜ |
 | 7 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⭐선택 | ⬜ |
 
-**Step 3 상세 (2026-02-03 코드 검토 결과)**:
+**Step 3 상세 (2026-02-03 완료)**:
 - @Version 필드: ✅ 이미 구현됨 (Inventory, Order, Payment)
 - OptimisticLockTest.java: ✅ 이미 존재 (service-inventory/src/test)
 - SQL 로그 설정: ✅ application-local.yml에 설정됨
-- GlobalExceptionHandler: ❌ **신규 생성 필요**
+- GlobalExceptionHandler: ✅ **신규 생성 완료**
+- RuntimeException → BusinessException 교체: ✅ 완료
+- ComponentScan 추가: ✅ 완료 (Order, Inventory, Payment Application)
 
 **🔄 순서 변경 이유**:
 ```
@@ -140,6 +142,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - Semantic Lock으로 빠른 응답 + 정보 제공
 - 세마포어로 외부 API 동시 호출 제한
 - **@Transactional + RLock 순서 주의** (핵심 함정)
+- **예외 처리 계층화**: BusinessException(400) → OptimisticLock(409) → Exception(500)
 
 **✅ Day 2 구현 완료 내역**:
 
@@ -152,6 +155,10 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | 락 전략 통합 가이드 | `docs/study/phase2a/04-2-lock-strategy.md` | RLock + Semantic Lock + @Version 관계 정리 |
 | Saga Isolation 문서 보강 | `docs/study/phase2a/11-saga-isolation.md` | Semantic Lock 실제 가치 섹션 추가 |
 | 05-optimistic-lock 문서 보강 | `docs/study/phase2a/05-optimistic-lock.md` | 현재 구현 상태 섹션 추가 (2026-02-03) |
+| GlobalExceptionHandler | `common/.../exception/GlobalExceptionHandler.java` | 전역 예외 처리 (BusinessException, OptimisticLock, 기타) |
+| ErrorCode 확장 | `common/.../exception/ErrorCode.java` | LOCK_ACQUISITION_FAILED, SERVICE_UNAVAILABLE 등 추가 |
+| RuntimeException 제거 | 각 ServiceClient, InventoryService | BusinessException으로 교체 (표준화된 에러 처리) |
+| ComponentScan 추가 | Order/Inventory/Payment Application | GlobalExceptionHandler 스캔 설정 |
 
 **학습 포인트 정리**:
 
@@ -186,6 +193,17 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
   - 이유: "효율성" 목적 (중복 방지), @Version이 최후 방어선
   - Redlock 필요 시: 금융 거래 등 "정확성" 필수 케이스
 
+*Step 3 (낙관적 락 + GlobalExceptionHandler):*
+- **예외 처리 계층 설계**:
+  - BusinessException (400): 비즈니스 규칙 위반 (재고 부족, 주문 없음)
+  - OptimisticLockingFailureException (409): 동시성 충돌 (클라이언트 재시도 필요)
+  - Exception (500): 시스템 오류 (내부 메시지 숨김)
+- **RuntimeException 핸들러 불필요 이유**:
+  - BusinessException이 RuntimeException 하위 클래스
+  - 인프라 오류는 500으로 처리하는 것이 적절
+- **ErrorCode 표준화**: 모든 예외에 코드+메시지 구조 적용
+- **ComponentScan 필요성**: common 모듈의 @RestControllerAdvice는 명시적 스캔 필요
+
 **📊 Day 2 현재 구현 상태 분석** (2026-02-03 코드 검토 완료):
 
 | 항목 | 위치 | 상태 | 비고 |
@@ -196,32 +214,25 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | SQL 로그 설정 | application-local.yml | ✅ 있음 | show-sql: true, format_sql: true |
 | Resilience4j | 각 ServiceClient | ✅ 완료 | Retry + CircuitBreaker |
 | 멱등성 | IdempotencyService | ✅ 완료 | Redis 기반 |
-| **GlobalExceptionHandler** | common/exception | ❌ **없음** | 신규 생성 필요 (Step 3) |
+| **GlobalExceptionHandler** | common/exception | ✅ 완료 | BusinessException, OptimisticLock 처리 |
 | Semantic Lock 필드 | Inventory 엔티티 | ❌ 없음 | reservationStatus, sagaId 추가 필요 |
 | 세마포어 | PaymentService | ❌ 없음 | PG 호출 제한 필요 |
 
-**🔧 Day 2 남은 구현 작업**: (2026-02-03 웹 검색 검증 후 재조정)
+**🔧 Day 2 남은 구현 작업**: (2026-02-03 재조정)
 
-*Step 3 (낙관적 락 @Version):* ★ 2026-02-03 코드 검토 완료
+*Step 3 (낙관적 락 @Version):* ✅ 완료
 ```
-[이미 구현된 항목]
-├── @Version 필드: Inventory, Order, Payment 엔티티
-├── OptimisticLockTest.java: service-inventory/src/test 에 존재
-└── SQL 로그 설정: application-local.yml (show-sql: true)
-
-[구현 필요 항목]
-└── GlobalExceptionHandler.java 신규 생성
-    ├── 위치: common/src/main/java/com/hanumoka/common/exception/
-    ├── @RestControllerAdvice
-    ├── BusinessException 처리 (400)
-    ├── ObjectOptimisticLockingFailureException 처리 (409)
-    └── 기타 Exception 처리 (500)
-
-[확인 필요 항목]
-├── Docker Compose 실행 후 OptimisticLockTest 실행
-├── SQL 로그에서 WHERE version=? 확인
-└── GlobalExceptionHandler 생성 후 각 서비스에서 스캔되는지 확인
-    (ComponentScan 추가 또는 서비스별 개별 Handler 생성)
+[완료된 항목]
+├── @Version 필드: Inventory, Order, Payment 엔티티 (기존)
+├── OptimisticLockTest.java: service-inventory/src/test (기존)
+├── SQL 로그 설정: application-local.yml (기존)
+├── GlobalExceptionHandler.java 신규 생성
+│   ├── BusinessException 처리 (400 Bad Request)
+│   ├── OptimisticLockingFailureException 처리 (409 Conflict)
+│   └── 기타 Exception 처리 (500 Internal Server Error)
+├── ErrorCode 확장 (LOCK_ACQUISITION_FAILED, SERVICE_UNAVAILABLE 등)
+├── RuntimeException → BusinessException 교체 (전체 MSA)
+└── ComponentScan 추가 (Order, Inventory, Payment Application)
 ```
 
 *Step 4 (Semantic Lock 구현 계획):*

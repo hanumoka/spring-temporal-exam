@@ -173,7 +173,7 @@ public class InventoryService {
             isLocked = lock.tryLock(5, TimeUnit.SECONDS);
 
             if (!isLocked) {
-                throw new RuntimeException("재고 락 획득 실패: productId=" + productId);
+                throw new BusinessException(ErrorCode.LOCK_ACQUISITION_FAILED.toErrorInfo());
             }//if
 
             log.debug("[DistributedLock] 락 획득 : {}", lockKey);
@@ -181,7 +181,7 @@ public class InventoryService {
             action.run();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("락 획득 중 인터럽트 발생", e);
+            throw new BusinessException(ErrorCode.LOCK_INTERRUPTED.toErrorInfo());
         } finally {
             if (isLocked && lock.isHeldByCurrentThread()) {
                 lock.unlock();

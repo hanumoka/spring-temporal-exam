@@ -2,6 +2,8 @@ package com.hanumoka.common.idempotency;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hanumoka.common.dto.ApiResponse;
+import com.hanumoka.common.exception.BusinessException;
+import com.hanumoka.common.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -98,7 +100,7 @@ public class IdempotencyAspect {
             return ResponseEntity.ok(apiResponse);
         } catch (Exception e) {
             log.error("[Idempotency] 응답 역직렬화 실패", e);
-            throw new RuntimeException("캐시된 응답 복원 실패", e);
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR.toErrorInfo());
         }
     }
 }

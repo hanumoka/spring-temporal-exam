@@ -1,6 +1,8 @@
 package com.hanumoka.orchestrator.pure.client;
 
 import com.hanumoka.common.dto.ApiResponse;
+import com.hanumoka.common.exception.BusinessException;
+import com.hanumoka.common.exception.ErrorCode;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
@@ -84,7 +86,7 @@ public class PaymentServiceClient {
      */
     private void approvePaymentFallback(Long paymentId, Exception ex) {
         log.error("[Fallback] 결제 승인 실패 - paymentId={}, 원인: {}", paymentId, ex.getMessage());
-        throw new RuntimeException("결제 서비스 일시 장애. 잠시 후 다시 시도해주세요.", ex);
+        throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE.toErrorInfo());
     }
 
     /**
@@ -132,6 +134,6 @@ public class PaymentServiceClient {
         log.error("[Fallback][CRITICAL] 환불 실패 - 수동 처리 필요! paymentId={}, 원인: {}",
                 paymentId, ex.getMessage());
         // TODO: Dead Letter Queue에 저장하여 나중에 재처리
-        throw new RuntimeException("환불 처리 실패. 관리자 확인이 필요합니다.", ex);
+        throw new BusinessException(ErrorCode.COMPENSATION_FAILED.toErrorInfo());
     }
 }

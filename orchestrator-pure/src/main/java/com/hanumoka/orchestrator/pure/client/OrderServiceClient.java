@@ -1,6 +1,8 @@
 package com.hanumoka.orchestrator.pure.client;
 
 import com.hanumoka.common.dto.ApiResponse;
+import com.hanumoka.common.exception.BusinessException;
+import com.hanumoka.common.exception.ErrorCode;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
@@ -53,7 +55,7 @@ public class OrderServiceClient {
 
     private Long createOrderFallback(Long customerId, Exception ex) {
         log.error("[Fallback] 주문 생성 실패 - customerId={}, 원인: {}", customerId, ex.getMessage());
-        throw new RuntimeException("주문 서비스 일시 장애. 잠시 후 다시 시도해주세요.", ex);
+        throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE.toErrorInfo());
     }
 
     /**
@@ -74,7 +76,7 @@ public class OrderServiceClient {
 
     private void confirmOrderFallback(Long orderId, Exception ex) {
         log.error("[Fallback] 주문 확정 실패 - orderId={}, 원인: {}", orderId, ex.getMessage());
-        throw new RuntimeException("주문 확정 실패. 잠시 후 다시 시도해주세요.", ex);
+        throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE.toErrorInfo());
     }
 
     /**
@@ -99,6 +101,6 @@ public class OrderServiceClient {
         log.error("[Fallback][CRITICAL] 주문 취소 실패 - 수동 처리 필요! orderId={}, 원인: {}",
                 orderId, ex.getMessage());
         // TODO: Dead Letter Queue에 저장
-        throw new RuntimeException("주문 취소 실패. 관리자 확인이 필요합니다.", ex);
+        throw new BusinessException(ErrorCode.COMPENSATION_FAILED.toErrorInfo());
     }
 }

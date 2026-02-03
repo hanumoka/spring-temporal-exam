@@ -1,6 +1,8 @@
 package com.hanumoka.orchestrator.pure.client;
 
 import com.hanumoka.common.dto.ApiResponse;
+import com.hanumoka.common.exception.BusinessException;
+import com.hanumoka.common.exception.ErrorCode;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
@@ -51,7 +53,7 @@ public class InventoryServiceClient {
     private void reserveStockFallback(Long productId, int quantity, Exception ex) {
         log.error("[Fallback] 재고 예약 실패 - productId={}, quantity={}, 원인: {}",
                 productId, quantity, ex.getMessage());
-        throw new RuntimeException("재고 서비스 일시 장애. 잠시 후 다시 시도해주세요.", ex);
+        throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE.toErrorInfo());
     }
 
     /**
@@ -73,7 +75,7 @@ public class InventoryServiceClient {
     private void confirmReservationFallback(Long productId, int quantity, Exception ex) {
         log.error("[Fallback] 재고 확정 실패 - productId={}, quantity={}, 원인: {}",
                 productId, quantity, ex.getMessage());
-        throw new RuntimeException("재고 확정 실패. 잠시 후 다시 시도해주세요.", ex);
+        throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE.toErrorInfo());
     }
 
     /**
@@ -98,6 +100,6 @@ public class InventoryServiceClient {
         log.error("[Fallback][CRITICAL] 재고 예약 취소 실패 - 수동 처리 필요! productId={}, quantity={}, 원인: {}",
                 productId, quantity, ex.getMessage());
         // TODO: Dead Letter Queue에 저장
-        throw new RuntimeException("재고 예약 취소 실패. 관리자 확인이 필요합니다.", ex);
+        throw new BusinessException(ErrorCode.COMPENSATION_FAILED.toErrorInfo());
     }
 }
