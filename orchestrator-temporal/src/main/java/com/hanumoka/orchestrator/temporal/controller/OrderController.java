@@ -114,7 +114,7 @@ public class OrderController {
                 new AsyncOrderResponse(
                         workflowId,
                         "Workflow started. Check Temporal UI for status.",
-                        "http://localhost:8088/namespaces/default/workflows/" + workflowId
+                        "http://localhost:21088/namespaces/default/workflows/" + workflowId
                 )
         );
     }

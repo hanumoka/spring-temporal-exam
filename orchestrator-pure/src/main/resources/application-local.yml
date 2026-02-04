@@ -9,8 +9,8 @@ spring:
 # 서비스 URL 설정
 services:
   order:
-    url: http://localhost:8081
+    url: http://localhost:21082
   inventory:
-    url: http://localhost:8082
+    url: http://localhost:21083
   payment:
-    url: http://localhost:8083
+    url: http://localhost:21084

@@ -51,7 +51,7 @@ services:
     image: temporalio/auto-setup:1.25.2
     container_name: temporal-exam-server
     ports:
-      - "7233:7233"   # gRPC (SDK 연결용)
+      - "21733:7233"   # gRPC (SDK 연결용)
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -80,7 +80,7 @@ services:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal
     ports:
-      - "25432:5432"
+      - "21432:5432"
     volumes:
       - temporal-postgresql-data:/var/lib/postgresql/data
     healthcheck:
@@ -98,7 +98,7 @@ services:
     image: temporalio/ui:2.31.2
     container_name: temporal-exam-ui
     ports:
-      - "8088:8080"   # http://localhost:8088
+      - "21088:8080"   # http://localhost:21088
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_CORS_ORIGINS=http://localhost:3000

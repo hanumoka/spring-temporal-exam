@@ -3,7 +3,7 @@
 # ============================================================================
 
 server:
-  port: 8081  # orchestrator-pure(8080)와 다른 포트
+  port: 21081  # orchestrator-pure(21080)와 다른 포트
 
 spring:
   application:
@@ -15,7 +15,7 @@ spring:
 temporal:
   # Temporal Server gRPC 주소
   connection:
-    target: localhost:7233
+    target: localhost:21733
 
   # Namespace (기본값: default)
   namespace: default
@@ -25,11 +25,11 @@ temporal:
 # ============================================================================
 services:
   order:
-    url: http://localhost:8082
+    url: http://localhost:21082
   inventory:
-    url: http://localhost:8083
+    url: http://localhost:21083
   payment:
-    url: http://localhost:8084
+    url: http://localhost:21084
 
 # ============================================================================
 # 로깅 설정
