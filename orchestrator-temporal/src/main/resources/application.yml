@@ -1,0 +1,44 @@
+# ============================================================================
+# Temporal Orchestrator 설정
+# ============================================================================
+
+server:
+  port: 8081  # orchestrator-pure(8080)와 다른 포트
+
+spring:
+  application:
+    name: orchestrator-temporal
+
+# ============================================================================
+# Temporal 설정
+# ============================================================================
+temporal:
+  # Temporal Server gRPC 주소
+  connection:
+    target: localhost:7233
+
+  # Namespace (기본값: default)
+  namespace: default
+
+# ============================================================================
+# 하위 서비스 호출 URL
+# ============================================================================
+services:
+  order:
+    url: http://localhost:8082
+  inventory:
+    url: http://localhost:8083
+  payment:
+    url: http://localhost:8084
+
+# ============================================================================
+# 로깅 설정
+# ============================================================================
+logging:
+  level:
+    com.hanumoka: DEBUG
+    io.temporal: INFO
+    # Temporal Worker 상세 로그 (문제 해결 시 활성화)
+    # io.temporal.internal: DEBUG
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

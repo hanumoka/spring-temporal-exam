@@ -1,5 +1,10 @@
 [versions]
 spring-boot = "3.5.9"
+temporal = "1.26.0"
+
+[libraries]
+temporal-sdk = { module = "io.temporal:temporal-sdk", version.ref = "temporal" }
+temporal-spring-boot-starter = { module = "io.temporal:temporal-spring-boot-starter", version.ref = "temporal" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }

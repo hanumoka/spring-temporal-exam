@@ -1,0 +1,71 @@
+### ============================================================================
+### Temporal Orchestrator 테스트
+### ============================================================================
+### 사전 조건:
+### 1. docker-compose up -d (Temporal Server 포함)
+### 2. service-order, service-inventory, service-payment 실행
+### 3. orchestrator-temporal 실행 (포트 8081)
+### ============================================================================
+
+### 1. 동기 주문 생성 (완료까지 대기)
+### 성공 시 orderId, paymentId, workflowId 반환
+POST http://localhost:8081/api/temporal/orders
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 2,
+  "amount": 20000,
+  "paymentMethod": "CARD"
+}
+
+### 2. 비동기 주문 생성 (즉시 반환)
+### workflowId 반환 후 Temporal UI에서 확인
+POST http://localhost:8081/api/temporal/orders/async
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 1,
+  "amount": 10000,
+  "paymentMethod": "CARD"
+}
+
+### 3. 재고 부족 테스트 (quantity=999)
+### 실패 시 보상 트랜잭션 자동 실행
+POST http://localhost:8081/api/temporal/orders
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 999,
+  "amount": 9990000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================================================
+### orchestrator-pure 비교 테스트 (포트 8080)
+### ============================================================================
+
+### Pure Saga 동기 주문 생성
+POST http://localhost:8080/api/saga/orders
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "productId": 1,
+  "quantity": 2,
+  "amount": 20000,
+  "paymentMethod": "CARD"
+}
+
+### ============================================================================
+### Temporal UI 접속
+### http://localhost:8088
+### - Workflow 실행 상태 확인
+### - Event History 조회
+### - 실패 원인 분석
+### ============================================================================
