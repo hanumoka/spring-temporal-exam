@@ -96,6 +96,58 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - `required=true`: Key 없으면 400 Bad Request (IETF 표준)
 - 결제/주문 같은 중요 API는 Key **필수**로 설정
 
+**멱등성 키 vs Saga ID 구분** (2026-02-04 보강):
+
+| 구분 | 멱등성 키 | Saga ID |
+|------|----------|---------|
+| **목적** | 중복 요청 방지 | 리소스 소유권 표시 |
+| **생성 주체** | 클라이언트 또는 Orchestrator | Orchestrator |
+| **적용 범위** | 단일 API 호출 | Saga 전체 (여러 API) |
+| **저장 위치** | Redis (TTL 기반) | DB (엔티티 필드) |
+| **해결 문제** | 네트워크 재시도, 더블클릭 | Dirty Read, 다른 Saga 침범 |
+
+**계층별 멱등성 키 관리 (권장 구조)**:
+
+```
+Layer 1: 클라이언트 → Orchestrator
+├── 생성 주체: 클라이언트 (FE)
+├── 키 형식: checkout-{sessionId}
+└── 목적: 더블클릭, 새로고침 중복 방지
+
+Layer 2: Orchestrator 내부
+├── 생성 주체: Orchestrator
+├── 키 형식: SAGA-XXXXXXXX (sagaId)
+└── 목적: Saga 실행 단위 식별, Semantic Lock 소유권
+
+Layer 3: Orchestrator → 각 서비스
+├── 생성 주체: Orchestrator
+├── 키 형식: {sagaId}-{step}-{action}
+└── 목적: Resilience4j 재시도 시 중복 처리 방지
+```
+
+**동일 주문 판단 정책 (비즈니스별)**:
+
+| 정책 | 키 구성 | 적합한 비즈니스 |
+|------|--------|----------------|
+| 체크아웃 세션 | `checkout-{sessionId}` | 이커머스 (의도적 재주문 허용) |
+| 시간 윈도우 | `{userId}-{productId}-{timeWindow}` | 음식 배달 (실수 방지) |
+| 요청 해시 | `hash(request body)` | 금융 (정밀 감지) |
+| 장바구니 ID | `cart-{cartId}` | 일반 쇼핑몰 (1:1 매핑) |
+
+**현재 구현 상태 vs 개선 필요**:
+
+```
+현재:
+├── sagaId: Orchestrator에서 생성 ✅
+├── Layer 1 멱등성: 미적용 ⚠️ (클라이언트 → Orchestrator)
+└── Layer 3 멱등성: 미적용 ⚠️ (Orchestrator → 각 서비스)
+
+개선 필요:
+├── Orchestrator 진입점에 @Idempotent 적용
+├── 각 ServiceClient 호출 시 {sagaId}-{step} 키 전달
+└── 각 서비스 API에 멱등성 체크 적용
+```
+
 *Step 3 (Resilience4j):*
 - **Retry**: 일시적 장애 자동 복구 (maxAttempts, waitDuration, exponentialBackoff)
 - **CircuitBreaker**: 연쇄 장애 방지 (CLOSED → OPEN → HALF_OPEN → CLOSED)
