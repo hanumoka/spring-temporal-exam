@@ -82,10 +82,8 @@ public class OutboxSchedulers {
     @Scheduled(fixedRate = 300000) // 5분마다
     public void retryFailedEvents() {
         // 1. 먼저 exhausted 이벤트를 DLQ로 이동
-        int movedToDlq = outboxService.moveExhaustedEventsToDlq(MAX_RETRY_COUNT, DLQ_BATCH_SIZE);
-        if (movedToDlq > 0) {
-            log.warn("Outbox DLQ 이동 완료: {}개", movedToDlq);
-        }
+        // (로그는 OutboxService에서 출력)
+        outboxService.moveExhaustedEventsToDlq(MAX_RETRY_COUNT, DLQ_BATCH_SIZE);
 
         // 2. 재시도 가능한 이벤트 처리
         List<OutboxEvent> failedEvents = outboxService.findFailedEventsForRetry(
