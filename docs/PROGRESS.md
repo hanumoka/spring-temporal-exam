@@ -628,14 +628,12 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 
 | 시간 | 항목 | 학습 문서 | 상태 |
 |------|------|----------|------|
-| 오전 | OpenTelemetry + **Grafana Tempo** (분산 추적) | 05-opentelemetry-tempo | ⬜ |
-| 오후 | Prometheus + Grafana (메트릭 시각화) | 06-prometheus-grafana | ⬜ |
-| 저녁 | Loki (로그 수집) | 07-loki | ⬜ |
-| 저녁 | Alertmanager (장애 알림) | 08-alertmanager | ⬜ |
+| 오전 | OpenTelemetry + Grafana Tempo (분산 추적) | 05-opentelemetry-tempo | ⭐선택 |
+| 오후 | Prometheus + Grafana (메트릭 시각화) | 06-prometheus-grafana | ⭐선택 |
+| 저녁 | Loki (로그 수집) | 07-loki | ⭐선택 |
+| 저녁 | Alertmanager (장애 알림) | 08-alertmanager | ⭐선택 |
 
-**핵심 학습 포인트**:
-- 분산 환경에서 traceId로 요청 추적하는 방법
-- Grafana 스택 (Tempo + Prometheus + Loki) 통합
+**참고**: MDC 로깅으로 traceId 추적 이미 구현됨 (Day 3). Observability 스택은 운영 환경 필요 시 도입.
 
 ---
 
@@ -699,9 +697,9 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 │  ├── DLQ (Dead Letter Queue) 구현                                           │
 │  └── Notification 서비스 + Fake SMS/Email Gateway                           │
 │                                                                             │
-│  Day 5 (2/6 목): Phase 2-B 후반 (Observability)                             │
-│  ├── OpenTelemetry + Grafana Tempo (분산 추적)                              │
-│  └── [선택] Prometheus/Grafana, Loki, Alertmanager                         │
+│  Day 5 (2/6 목): Phase 2-B 후반                                             │
+│  ├── [선택] Observability 스택 (Tempo, Prometheus, Loki, Alertmanager)     │
+│  └── MDC 로깅으로 기본 추적 구현됨 (Day 3)                                  │
 │                                                                             │
 │  Day 6 (2/7 금): Phase 3 + DevOps                                           │
 │  ├── Temporal 개념 + 인프라 + Spring 연동                                   │
@@ -748,7 +746,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 │  Phase 2-B (4개 필수)                                                       │
 │  ├── 01-redis-basics        ← Redis 기초 (다른 주제의 전제)                  │
 │  ├── 04-outbox-pattern      ← 이벤트 발행 신뢰성 (중요!)                    │
-│  ├── 05-opentelemetry-tempo ← 분산 추적 (Grafana 스택)                      │
+│  ├── 05-opentelemetry-tempo ← 분산 추적 (⭐선택, MDC 대체)                  │
 │  └── 09-performance-testing ← k6 부하 테스트                                │
 │                                                                             │
 │  Phase 3 (전체 필수)                                                        │
@@ -810,7 +808,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 2-A | `10-contract-testing.md` | Pact 기반 계약 테스트 | ⭐선택 | 실무 도입 장벽 |
 | 2-A | `12-redis-lock-pitfalls.md` | 10가지 함정과 해결책 | 핵심만 필수 | 심화는 선택 |
 | 2-B | `04-1-cdc-debezium.md` | 🆕 Polling → CDC 전환 | **선택** | Outbox 학습 후 |
-| 2-B | `05-opentelemetry-tempo.md` | Zipkin → Grafana Tempo | 필수 | |
+| 2-B | `05-opentelemetry-tempo.md` | Zipkin → Grafana Tempo | ⭐선택 | MDC 로깅 대체 |
 | 2-B | `09-performance-testing.md` | k6 부하 테스트 | 필수 | |
 | DevOps | `01-github-actions.md` | CI/CD 파이프라인 | ⭐선택 | |
 | 고급 | `event-sourcing-cqrs.md` | 언제 쓰고 언제 안 쓰는지 | 선택 | |
@@ -846,7 +844,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 
 ```
 01-redis-basics → 02-redis-stream → 03-redisson → 04-outbox-pattern
-→ 05-opentelemetry-tempo → 06-prometheus-grafana → 07-loki → 08-alertmanager
+→ [선택] 05-opentelemetry-tempo → 06-prometheus-grafana → 07-loki → 08-alertmanager
 → 09-performance-testing
 ```
 
@@ -912,7 +910,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 3 | Outbox 패턴 (Polling 방식) | ✅ 완료 | 04-outbox-pattern | 필수 | Day 4 + DLQ |
 | 4 | Notification 서비스 구현 | ✅ 완료 | - | 필수 | Day 4 |
 | 5 | Fake SMS/Email 구현체 작성 | ✅ 완료 | [D015](./architecture/DECISIONS.md#d015) | 필수 | Day 4 |
-| 6 | OpenTelemetry + Grafana Tempo | 대기 | 05-opentelemetry-tempo | 필수 | 분산 추적 |
+| 6 | OpenTelemetry + Grafana Tempo | 대기 | 05-opentelemetry-tempo | ⭐선택 | MDC 로깅 대체 |
 | 7 | k6 성능 테스트 | 대기 | 09-performance-testing | 필수 | |
 | --- | --- 아래는 선택 항목 --- | --- | --- | --- | --- |
 | 8 | Redisson 심화 | 대기 | 03-redisson | ⭐선택 | |
