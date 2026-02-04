@@ -1,10 +1,12 @@
 package com.hanumoka.inventory.controller;
 
 import com.hanumoka.common.dto.ApiResponse;
+import com.hanumoka.common.idempotency.Idempotent;
 import com.hanumoka.inventory.entity.Inventory;
 import com.hanumoka.inventory.entity.Product;
 import com.hanumoka.inventory.service.InventoryService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -49,38 +51,44 @@ public class InventoryController {
 
     /**
      * 재고 예약 (Saga용) - sagaId 필수
+     * ★ Layer 3 멱등성 적용
      */
     @PostMapping("/{productId}/reserve")
-    public ApiResponse<Void> reserveStock(
+    @Idempotent(prefix = "inventory-reserve", required = true)
+    public ResponseEntity<ApiResponse<Void>> reserveStock(
             @PathVariable Long productId,
             @RequestParam int quantity,
             @RequestParam String sagaId) {
         inventoryService.reserveStock(productId, quantity, sagaId);
-        return ApiResponse.success();
+        return ResponseEntity.ok(ApiResponse.success());
     }
 
     /**
      * 예약 확정 (Saga용) - sagaId 필수
+     * ★ Layer 3 멱등성 적용
      */
     @PostMapping("/{productId}/confirm")
-    public ApiResponse<Void> confirmReservation(
+    @Idempotent(prefix = "inventory-confirm", required = true)
+    public ResponseEntity<ApiResponse<Void>> confirmReservation(
             @PathVariable Long productId,
             @RequestParam int quantity,
             @RequestParam String sagaId) {
         inventoryService.confirmReservation(productId, quantity, sagaId);
-        return ApiResponse.success();
+        return ResponseEntity.ok(ApiResponse.success());
     }
 
     /**
      * 예약 취소 - 보상 트랜잭션 (Saga용) - sagaId 필수
+     * ★ Layer 3 멱등성 적용
      */
     @PostMapping("/{productId}/cancel")
-    public ApiResponse<Void> cancelReservation(
+    @Idempotent(prefix = "inventory-cancel", required = true)
+    public ResponseEntity<ApiResponse<Void>> cancelReservation(
             @PathVariable Long productId,
             @RequestParam int quantity,
             @RequestParam String sagaId) {
         inventoryService.cancelReservation(productId, quantity, sagaId);
-        return ApiResponse.success();
+        return ResponseEntity.ok(ApiResponse.success());
     }
 
     /**

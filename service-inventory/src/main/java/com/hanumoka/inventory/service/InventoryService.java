@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,8 +25,18 @@ public class InventoryService {
 
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
-
     private final RedissonClient redissonClient;
+
+    // ========================================
+    // Self-injection for AOP proxy
+    // 같은 클래스 내 메서드 호출 시 @Transactional이 적용되도록
+    // ========================================
+    private InventoryService self;
+
+    @Autowired
+    public void setSelf(InventoryService self) {
+        this.self = self;
+    }
 
     /**
      * 상품 등록 (재고 포함)
@@ -79,93 +90,124 @@ public class InventoryService {
 
     /**
      * 재고 예약 (Saga Step) - Semantic Lock 적용
+     * 락을 트랜잭션 밖에서 관리하여 커밋 후 락 해제 (커밋 전 데이터 노출 방지)
      *
      * @param productId 상품 ID
      * @param quantity  예약 수량
      * @param sagaId    Saga 식별자 (Semantic Lock용)
      */
-    @Transactional(timeout = 30)
     public void reserveStock(Long productId, int quantity, String sagaId) {
-
         executeWithLock(productId, () -> {
-            Inventory inventory = getInventory(productId);
-
-            // 1. Semantic Lock 획득 (다른 Saga 작업 중이면 예외)
-            inventory.acquireSemanticLock(sagaId);
-            log.debug("[SemanticLock] 획득: productId={}, sagaId={}", productId, sagaId);
-
-            // 2. 재고 예약
-            inventory.reserve(quantity);
-
-            // 3. Semantic Lock 상태 변경 (RESERVING → RESERVED)
-            inventory.releaseSemanticLockOnSuccess(sagaId);
-
-            log.info("재고 예약 완료: productId={}, quantity={}, sagaId={}, available={}",
-                    productId, quantity, sagaId, inventory.getAvailableQuantity());
+            self.reserveStockInternal(productId, quantity, sagaId);
         });
     }
 
     /**
+     * 재고 예약 내부 처리 (트랜잭션 적용)
+     */
+    @Transactional(timeout = 30)
+    protected void reserveStockInternal(Long productId, int quantity, String sagaId) {
+        Inventory inventory = getInventory(productId);
+
+        // 1. Semantic Lock 획득 (다른 Saga 작업 중이면 예외)
+        inventory.acquireSemanticLock(sagaId);
+        log.debug("[SemanticLock] 획득: productId={}, sagaId={}", productId, sagaId);
+
+        // 2. 재고 예약
+        inventory.reserve(quantity);
+
+        // 3. Semantic Lock 상태 변경 (RESERVING → RESERVED)
+        inventory.releaseSemanticLockOnSuccess(sagaId);
+
+        log.info("재고 예약 완료: productId={}, quantity={}, sagaId={}, available={}",
+                productId, quantity, sagaId, inventory.getAvailableQuantity());
+    }
+
+    /**
      * 예약 확정 (Saga Step) - Semantic Lock 검증
+     * 락을 트랜잭션 밖에서 관리하여 커밋 후 락 해제 (커밋 전 데이터 노출 방지)
      *
      * @param productId 상품 ID
      * @param quantity  확정 수량
      * @param sagaId    Saga 식별자
      */
-    @Transactional(timeout = 30)
     public void confirmReservation(Long productId, int quantity, String sagaId) {
         executeWithLock(productId, () -> {
-            Inventory inventory = getInventory(productId);
-
-            // 1. Saga 소유권 검증
-            inventory.validateSagaOwnership(sagaId);
-
-            // 2. 예약 확정
-            inventory.confirmReservation(quantity);
-
-            // 3. Semantic Lock 완전 해제
-            inventory.clearSemanticLock();
-
-            log.info("재고 예약 확정: productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
+            self.confirmReservationInternal(productId, quantity, sagaId);
         });
     }
 
     /**
+     * 예약 확정 내부 처리 (트랜잭션 적용)
+     */
+    @Transactional(timeout = 30)
+    protected void confirmReservationInternal(Long productId, int quantity, String sagaId) {
+        Inventory inventory = getInventory(productId);
+
+        // 1. Saga 소유권 검증
+        inventory.validateSagaOwnership(sagaId);
+
+        // 2. 예약 확정
+        inventory.confirmReservation(quantity);
+
+        // 3. Semantic Lock 완전 해제
+        inventory.clearSemanticLock();
+
+        log.info("재고 예약 확정: productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
+    }
+
+    /**
      * 예약 취소 - 보상 트랜잭션 (Saga Compensation) - Semantic Lock 해제
+     * 락을 트랜잭션 밖에서 관리하여 커밋 후 락 해제 (커밋 전 데이터 노출 방지)
      *
      * @param productId 상품 ID
      * @param quantity  취소 수량
      * @param sagaId    Saga 식별자
      */
-    @Transactional(timeout = 30)
     public void cancelReservation(Long productId, int quantity, String sagaId) {
         executeWithLock(productId, () -> {
-            Inventory inventory = getInventory(productId);
-
-            // 1. Saga 소유권 검증 (다른 Saga의 예약을 취소하지 않도록)
-            inventory.validateSagaOwnership(sagaId);
-
-            // 2. 예약 취소
-            inventory.cancelReservation(quantity);
-
-            // 3. Semantic Lock 해제 (AVAILABLE로 복귀)
-            inventory.releaseSemanticLockOnFailure(sagaId);
-
-            log.info("재고 예약 취소 (보상): productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
+            self.cancelReservationInternal(productId, quantity, sagaId);
         });
     }
 
     /**
-     * 재고 추가 (입고)
+     * 예약 취소 내부 처리 (트랜잭션 적용)
      */
     @Transactional(timeout = 30)
+    protected void cancelReservationInternal(Long productId, int quantity, String sagaId) {
+        Inventory inventory = getInventory(productId);
+
+        // 1. Saga 소유권 검증 (다른 Saga의 예약을 취소하지 않도록)
+        inventory.validateSagaOwnership(sagaId);
+
+        // 2. 예약 취소
+        inventory.cancelReservation(quantity);
+
+        // 3. Semantic Lock 해제 (AVAILABLE로 복귀)
+        inventory.releaseSemanticLockOnFailure(sagaId);
+
+        log.info("재고 예약 취소 (보상): productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
+    }
+
+    /**
+     * 재고 추가 (입고)
+     * 락을 트랜잭션 밖에서 관리하여 커밋 후 락 해제 (커밋 전 데이터 노출 방지)
+     */
     public void addStock(Long productId, int quantity) {
         executeWithLock(productId, () -> {
-            Inventory inventory = getInventory(productId);
-            inventory.addStock(quantity);
-            log.info("재고 추가: productId={}, quantity={}, total={}",
-                    productId, quantity, inventory.getQuantity());
+            self.addStockInternal(productId, quantity);
         });
+    }
+
+    /**
+     * 재고 추가 내부 처리 (트랜잭션 적용)
+     */
+    @Transactional(timeout = 30)
+    protected void addStockInternal(Long productId, int quantity) {
+        Inventory inventory = getInventory(productId);
+        inventory.addStock(quantity);
+        log.info("재고 추가: productId={}, quantity={}, total={}",
+                productId, quantity, inventory.getQuantity());
     }
 
     /**

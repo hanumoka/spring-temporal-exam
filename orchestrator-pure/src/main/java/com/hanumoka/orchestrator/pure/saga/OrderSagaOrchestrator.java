@@ -61,17 +61,18 @@ public class OrderSagaOrchestrator {
             stockReserved = true;
             log.info("[T2] 재고 예약 완료");
 
-            // T3: 결제 생성 + 승인
+            // T3: 결제 생성 + 승인 (sagaId 전달 - Layer 3 멱등성)
             log.info("[T3] 결제 생성 시작");
             paymentId = paymentClient.createPayment(
                     orderId,
                     request.amount(),
-                    request.paymentMethod()
+                    request.paymentMethod(),
+                    sagaId
             );
             log.info("[T3] 결제 생성 완료: paymentId={}", paymentId);
 
             log.info("[T3] 결제 승인 시작");
-            paymentClient.approvePayment(paymentId);
+            paymentClient.approvePayment(paymentId, sagaId);
             log.info("[T3] 결제 승인 완료");
 
             // T4: 주문 확정
@@ -84,9 +85,9 @@ public class OrderSagaOrchestrator {
             inventoryClient.confirmReservation(request.productId(), request.quantity(), sagaId);
             log.info("[T5] 재고 확정 완료");
 
-            // T6: 결제 확정
+            // T6: 결제 확정 (sagaId 전달 - Layer 3 멱등성)
             log.info("[T6] 결제 확정 시작");
-            paymentClient.confirmPayment(paymentId);
+            paymentClient.confirmPayment(paymentId, sagaId);
             log.info("[T6] 결제 확정 완료");
 
             log.info("========== Saga 성공 [sagaId={}] ==========", sagaId);
@@ -117,11 +118,11 @@ public class OrderSagaOrchestrator {
                             Long paymentId, OrderSagaRequest request, String sagaId) {
         log.info("========== 보상 트랜잭션 시작 [sagaId={}] ==========", sagaId);
 
-        // C3: 결제 환불 (결제가 생성된 경우)
+        // C3: 결제 환불 (결제가 생성된 경우, sagaId 전달 - Layer 3 멱등성)
         if (paymentId != null) {
             try {
                 log.info("[C3] 결제 환불 시작: paymentId={}", paymentId);
-                paymentClient.refundPayment(paymentId);
+                paymentClient.refundPayment(paymentId, sagaId);
                 log.info("[C3] 결제 환불 완료");
             } catch (Exception e) {
                 log.error("[C3] 결제 환불 실패: {}", e.getMessage());

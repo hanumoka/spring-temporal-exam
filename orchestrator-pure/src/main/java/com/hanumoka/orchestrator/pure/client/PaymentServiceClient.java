@@ -37,43 +37,51 @@ public class PaymentServiceClient {
 
     /**
      * 결제 생성
+     * ★ Layer 3 멱등성 적용
      *
      * Resilience4j 미적용 이유:
      * - 결제 생성은 내부 DB 작업 (외부 PG 호출 X)
      * - 실패 시 Saga 보상으로 처리
      */
-    public Long createPayment(Long orderId, BigDecimal amount, String paymentMethod) {
+    public Long createPayment(Long orderId, BigDecimal amount, String paymentMethod, String sagaId) {
+        String idempotencyKey = sagaId + "-payment-create";
+        log.debug("[Payment] 결제 생성 시도: orderId={}, idempotencyKey={}", orderId, idempotencyKey);
+
         ApiResponse<Map<String, Object>> response = restClient.post()
                 .uri(BASE_URL + "?orderId={orderId}&amount={amount}&paymentMethod={paymentMethod}",
                         orderId, amount, paymentMethod)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
 
         Long paymentId = ((Number) response.getData().get("id")).longValue();
-        log.info("결제 생성 완료: paymentId={}", paymentId);
+        log.info("결제 생성 완료: paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
         return paymentId;
     }
 
     /**
      * 결제 승인 (PG 호출)
      *
-     * ★ Resilience4j 적용 (외부 PG 호출)
+     * ★ Resilience4j 적용 + Layer 3 멱등성
      * - CircuitBreaker: PG 장애 시 빠른 실패
      * - Retry: 네트워크 일시 오류 시 재시도
+     * - 멱등성 키로 중복 승인 방지
      *
      * fallbackMethod: 서킷 OPEN 또는 모든 재시도 실패 시 호출
      */
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "approvePaymentFallback")
     @Retry(name = RETRY_NAME)
-    public void approvePayment(Long paymentId) {
-        log.debug("[Resilience4j] 결제 승인 시도: paymentId={}", paymentId);
+    public void approvePayment(Long paymentId, String sagaId) {
+        String idempotencyKey = sagaId + "-payment-approve";
+        log.debug("[Resilience4j] 결제 승인 시도: paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
 
         restClient.post()
                 .uri(BASE_URL + "/{paymentId}/approve", paymentId)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(ApiResponse.class);
 
-        log.info("결제 승인 완료: paymentId={}", paymentId);
+        log.info("결제 승인 완료: paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
     }
 
     /**
@@ -82,47 +90,56 @@ public class PaymentServiceClient {
      * - 모든 Retry 시도 실패 시 호출
      *
      * @param paymentId 결제 ID
+     * @param sagaId Saga 식별자
      * @param ex 발생한 예외
      */
-    private void approvePaymentFallback(Long paymentId, Exception ex) {
-        log.error("[Fallback] 결제 승인 실패 - paymentId={}, 원인: {}", paymentId, ex.getMessage());
+    private void approvePaymentFallback(Long paymentId, String sagaId, Exception ex) {
+        log.error("[Fallback] 결제 승인 실패 - paymentId={}, sagaId={}, 원인: {}", paymentId, sagaId, ex.getMessage());
         throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE.toErrorInfo());
     }
 
     /**
      * 결제 확정
+     * ★ Layer 3 멱등성 적용
      *
      * Resilience4j 미적용 이유:
      * - 내부 상태 변경 (외부 호출 X)
      * - 실패 시 Saga 보상으로 처리
      */
-    public void confirmPayment(Long paymentId) {
+    public void confirmPayment(Long paymentId, String sagaId) {
+        String idempotencyKey = sagaId + "-payment-confirm";
+        log.debug("[Payment] 결제 확정 시도: paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
+
         restClient.post()
                 .uri(BASE_URL + "/{paymentId}/confirm", paymentId)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(ApiResponse.class);
 
-        log.info("결제 확정 완료: paymentId={}", paymentId);
+        log.info("결제 확정 완료: paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
     }
 
     /**
      * 환불 (보상 트랜잭션)
      *
-     * ★ Resilience4j 적용 (외부 PG 호출)
+     * ★ Resilience4j 적용 + Layer 3 멱등성
      * - 보상 트랜잭션은 반드시 성공해야 함
      * - 재시도 횟수를 더 늘릴 수 있음 (별도 설정 가능)
+     * - 멱등성 키로 중복 환불 방지
      */
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "refundPaymentFallback")
     @Retry(name = RETRY_NAME)
-    public void refundPayment(Long paymentId) {
-        log.debug("[Resilience4j] 결제 환불 시도: paymentId={}", paymentId);
+    public void refundPayment(Long paymentId, String sagaId) {
+        String idempotencyKey = sagaId + "-payment-refund";
+        log.debug("[Resilience4j] 결제 환불 시도: paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
 
         restClient.post()
                 .uri(BASE_URL + "/{paymentId}/refund", paymentId)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(ApiResponse.class);
 
-        log.info("결제 환불 완료 (보상): paymentId={}", paymentId);
+        log.info("결제 환불 완료 (보상): paymentId={}, idempotencyKey={}", paymentId, idempotencyKey);
     }
 
     /**
@@ -130,9 +147,9 @@ public class PaymentServiceClient {
      * - 보상 실패는 심각한 상황 (수동 처리 필요)
      * - 실무에서는 Dead Letter Queue에 저장하여 나중에 재처리
      */
-    private void refundPaymentFallback(Long paymentId, Exception ex) {
-        log.error("[Fallback][CRITICAL] 환불 실패 - 수동 처리 필요! paymentId={}, 원인: {}",
-                paymentId, ex.getMessage());
+    private void refundPaymentFallback(Long paymentId, String sagaId, Exception ex) {
+        log.error("[Fallback][CRITICAL] 환불 실패 - 수동 처리 필요! paymentId={}, sagaId={}, 원인: {}",
+                paymentId, sagaId, ex.getMessage());
         // TODO: Dead Letter Queue에 저장하여 나중에 재처리
         throw new BusinessException(ErrorCode.COMPENSATION_FAILED.toErrorInfo());
     }

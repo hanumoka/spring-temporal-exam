@@ -33,23 +33,26 @@ public class InventoryServiceClient {
     /**
      * 재고 예약
      * <p>
-     * ★ Resilience4j 적용
+     * ★ Resilience4j 적용 + Layer 3 멱등성
      * - 재고 예약 실패 시 주문 진행 불가
      * - 네트워크 오류 시 재시도
+     * - 멱등성 키로 중복 실행 방지
      */
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "reserveStockFallback")
     @Retry(name = RETRY_NAME)
     public void reserveStock(Long productId, int quantity, String sagaId) {
-        log.debug("[Resilience4j] 재고 예약 시도: productId={}, quantity={}, sagaId={}",
-                productId, quantity, sagaId);
+        String idempotencyKey = sagaId + "-inventory-reserve";
+        log.debug("[Resilience4j] 재고 예약 시도: productId={}, quantity={}, idempotencyKey={}",
+                productId, quantity, idempotencyKey);
 
         restClient.post()
                 .uri(BASE_URL + "/{productId}/reserve?quantity={quantity}&sagaId={sagaId}",
                         productId, quantity, sagaId)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(ApiResponse.class);
 
-        log.info("재고 예약 완료: productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
+        log.info("재고 예약 완료: productId={}, quantity={}, idempotencyKey={}", productId, quantity, idempotencyKey);
     }
 
     private void reserveStockFallback(Long productId, int quantity, String sagaId, Exception ex) {
@@ -60,19 +63,23 @@ public class InventoryServiceClient {
 
     /**
      * 예약 확정
+     * ★ Layer 3 멱등성 적용
      */
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "confirmReservationFallback")
     @Retry(name = RETRY_NAME)
     public void confirmReservation(Long productId, int quantity, String sagaId) {
-        log.debug("[Resilience4j] 재고 확정 시도: productId={}, quantity={}", productId, quantity);
+        String idempotencyKey = sagaId + "-inventory-confirm";
+        log.debug("[Resilience4j] 재고 확정 시도: productId={}, quantity={}, idempotencyKey={}",
+                productId, quantity, idempotencyKey);
 
         restClient.post()
                 .uri(BASE_URL + "/{productId}/confirm?quantity={quantity}&sagaId={sagaId}",
                         productId, quantity, sagaId)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(ApiResponse.class);
 
-        log.info("재고 확정 완료: productId={}, quantity={}", productId, quantity);
+        log.info("재고 확정 완료: productId={}, quantity={}, idempotencyKey={}", productId, quantity, idempotencyKey);
     }
 
     private void confirmReservationFallback(Long productId, int quantity, String sagaId, Exception ex) {
@@ -84,7 +91,7 @@ public class InventoryServiceClient {
     /**
      * 예약 취소 (보상 트랜잭션)
      * <p>
-     * ★ 보상은 반드시 성공해야 함
+     * ★ 보상은 반드시 성공해야 함 + Layer 3 멱등성 적용
      *
      * @param productId 상품 ID
      * @param quantity  취소 수량
@@ -93,16 +100,18 @@ public class InventoryServiceClient {
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "cancelReservationFallback")
     @Retry(name = RETRY_NAME)
     public void cancelReservation(Long productId, int quantity, String sagaId) {
-        log.debug("[Resilience4j] 재고 예약 취소 시도: productId={}, quantity={}, sagaId={}",
-                productId, quantity, sagaId);
+        String idempotencyKey = sagaId + "-inventory-cancel";
+        log.debug("[Resilience4j] 재고 예약 취소 시도: productId={}, quantity={}, idempotencyKey={}",
+                productId, quantity, idempotencyKey);
 
         restClient.post()
                 .uri(BASE_URL + "/{productId}/cancel?quantity={quantity}&sagaId={sagaId}",
                         productId, quantity, sagaId)
+                .header("X-Idempotency-Key", idempotencyKey)
                 .retrieve()
                 .body(ApiResponse.class);
 
-        log.info("재고 예약 취소 완료 (보상): productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
+        log.info("재고 예약 취소 완료 (보상): productId={}, quantity={}, idempotencyKey={}", productId, quantity, idempotencyKey);
     }
 
     private void cancelReservationFallback(Long productId, int quantity, String sagaId, Exception ex) {
