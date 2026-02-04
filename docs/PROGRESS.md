@@ -494,11 +494,11 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 
 | 순서 | 항목 | 학습 문서 | 구분 | 상태 |
 |------|------|----------|------|------|
-| 1 | Redis 기초 (자료구조, 명령어) | 01-redis-basics | 필수 | ⬜ |
-| 2 | Redis Stream (Consumer Group) | 02-redis-stream | 필수 | ⬜ |
+| 1 | Redis 기초 (자료구조, 명령어) | 01-redis-basics | 필수 | ✅ 학습 완료 |
+| 2 | Redis Stream (Consumer Group) | 02-redis-stream | 필수 | ✅ 학습 완료 |
 | 3 | Redisson 심화 (Pending List, Phantom Key) | 03-redisson | ⭐선택 | ⬜ |
-| 4 | **Outbox 패턴 (Polling 방식)** | 04-outbox-pattern | 필수 | ⬜ |
-| 5 | Notification 서비스 구현 | - | 필수 | ⬜ |
+| 4 | **Outbox 패턴 (Polling 방식)** | 04-outbox-pattern | 필수 | ✅ 구현 완료 |
+| 5 | Notification 서비스 구현 | - | 필수 | ✅ 구현 완료 |
 | 6 | **CDC (Debezium) 전환** | 04-1-cdc-debezium | ⭐선택 | ⬜ |
 
 **🆕 CDC(Debezium) 학습 경로**:
