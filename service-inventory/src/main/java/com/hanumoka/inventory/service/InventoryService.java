@@ -78,69 +78,80 @@ public class InventoryService {
     }
 
     /**
-     * 재고 예약 (Saga Step)
+     * 재고 예약 (Saga Step) - Semantic Lock 적용
+     *
+     * @param productId 상품 ID
+     * @param quantity  예약 수량
+     * @param sagaId    Saga 식별자 (Semantic Lock용)
      */
     @Transactional(timeout = 30)
-    public void reserveStock(Long productId, int quantity) {
+    public void reserveStock(Long productId, int quantity, String sagaId) {
 
         executeWithLock(productId, () -> {
             Inventory inventory = getInventory(productId);
+
+            // 1. Semantic Lock 획득 (다른 Saga 작업 중이면 예외)
+            inventory.acquireSemanticLock(sagaId);
+            log.debug("[SemanticLock] 획득: productId={}, sagaId={}", productId, sagaId);
+
+            // 2. 재고 예약
             inventory.reserve(quantity);
-            log.info("재고 예약 완료: productId={}, quantity={}, available={}", productId, quantity, inventory.getAvailableQuantity());
-        });
 
-//        String lockKey = "lock:inventory:" + productId;
-//        RLock lock = redissonClient.getLock(lockKey);
-//
-//        boolean isLocked = false;
-//
-//        try {
-//
-////            isLocked = lock.tryLock(5, 10, TimeUnit.SECONDS); // 락 획득 시도 ( 최대 5초 대기, 락 유지 10초)
-//            isLocked = lock.tryLock(5, TimeUnit.SECONDS);  // 릴리즈 타임을 생략하여, watchdog 활성, 5초 대기 기본 30초 + 자동 연장
-//
-//            if (!isLocked) {
-//                throw new RuntimeException("재고 락 획득 실패: productId=" + productId);
-//            }
-//
-//            log.debug("[DistributedLock] 락 획득 : {}", lockKey);
-//            Inventory inventory = getInventory(productId);
-//            inventory.reserve(quantity);
-//
-//            log.info("재고 예약 완료: productId={}, quantity={}, available={}", productId, quantity, inventory.getAvailableQuantity());
-//        } catch (InterruptedException e) {
-//            Thread.currentThread().interrupt();
-//            throw new RuntimeException("락 획득 중 인터럽트 발생", e);
-//        } finally {
-//            // 락 해제 (락을 획득한 경우에만)
-//            if (isLocked && lock.isHeldByCurrentThread()) {
-//                lock.unlock();
-//                log.debug("[DistributedLock] 락 해제 : {}", lockKey);
-//            }
-//        }// finally
-    } // reserveStock
+            // 3. Semantic Lock 상태 변경 (RESERVING → RESERVED)
+            inventory.releaseSemanticLockOnSuccess(sagaId);
+
+            log.info("재고 예약 완료: productId={}, quantity={}, sagaId={}, available={}",
+                    productId, quantity, sagaId, inventory.getAvailableQuantity());
+        });
+    }
 
     /**
-     * 예약 확정 (Saga Step)
+     * 예약 확정 (Saga Step) - Semantic Lock 검증
+     *
+     * @param productId 상품 ID
+     * @param quantity  확정 수량
+     * @param sagaId    Saga 식별자
      */
     @Transactional(timeout = 30)
-    public void confirmReservation(Long productId, int quantity) {
+    public void confirmReservation(Long productId, int quantity, String sagaId) {
         executeWithLock(productId, () -> {
             Inventory inventory = getInventory(productId);
+
+            // 1. Saga 소유권 검증
+            inventory.validateSagaOwnership(sagaId);
+
+            // 2. 예약 확정
             inventory.confirmReservation(quantity);
-            log.info("재고 예약 확정: productId={}, quantity={}", productId, quantity);
+
+            // 3. Semantic Lock 완전 해제
+            inventory.clearSemanticLock();
+
+            log.info("재고 예약 확정: productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
         });
-    } //confirmReservation
+    }
 
     /**
-     * 예약 취소 - 보상 트랜잭션 (Saga Compensation)
+     * 예약 취소 - 보상 트랜잭션 (Saga Compensation) - Semantic Lock 해제
+     *
+     * @param productId 상품 ID
+     * @param quantity  취소 수량
+     * @param sagaId    Saga 식별자
      */
     @Transactional(timeout = 30)
-    public void cancelReservation(Long productId, int quantity) {
+    public void cancelReservation(Long productId, int quantity, String sagaId) {
         executeWithLock(productId, () -> {
             Inventory inventory = getInventory(productId);
+
+            // 1. Saga 소유권 검증 (다른 Saga의 예약을 취소하지 않도록)
+            inventory.validateSagaOwnership(sagaId);
+
+            // 2. 예약 취소
             inventory.cancelReservation(quantity);
-            log.info("재고 예약 취소 (보상): productId={}, quantity={}", productId, quantity);
+
+            // 3. Semantic Lock 해제 (AVAILABLE로 복귀)
+            inventory.releaseSemanticLockOnFailure(sagaId);
+
+            log.info("재고 예약 취소 (보상): productId={}, quantity={}, sagaId={}", productId, quantity, sagaId);
         });
     }
 

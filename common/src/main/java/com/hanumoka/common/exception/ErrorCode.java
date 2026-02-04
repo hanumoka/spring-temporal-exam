@@ -39,6 +39,12 @@ public enum ErrorCode {
     // ========================================
     INSUFFICIENT_STOCK("INVENTORY_001", "재고가 부족합니다"),
 
+    /** Semantic Lock: 다른 Saga가 작업 중 */
+    INVENTORY_LOCKED_BY_OTHER_SAGA("INVENTORY_002", "다른 주문이 처리 중입니다. 잠시 후 다시 시도해주세요."),
+
+    /** Semantic Lock: 유효하지 않은 Saga ID */
+    INVALID_SAGA_OWNERSHIP("INVENTORY_003", "해당 예약에 대한 권한이 없습니다."),
+
     // ========================================
     // 결제
     // ========================================

@@ -10,6 +10,9 @@ spring:
     hibernate:
       ddl-auto: validate
     show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
 
   # Redis 설정 (Redisson)
   data:

@@ -3,7 +3,7 @@
 ## 현재 상태
 
 - **현재 Phase**: Phase 2-A - 동기 REST 기반 Saga
-- **마지막 업데이트**: 2026-02-03
+- **마지막 업데이트**: 2026-02-04
 - **Spring Boot**: 3.5.9
 - **목표 완료일**: 2026-02-08 (토) - 7일 확장
 
@@ -114,7 +114,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | 1 | 분산 락 (RLock) + Watchdog | 04-distributed-lock | 필수 | ✅ 완료 |
 | 2 | **Saga Isolation 핵심** (Dirty Read, Lost Update) | 11-saga-isolation, 04-2-lock-strategy | 필수 | ✅ 완료 |
 | 3 | 낙관적 락 (@Version) + GlobalExceptionHandler | 05-optimistic-lock | 필수 | ✅ 완료 |
-| 4 | Semantic Lock 구현 | 04-2-lock-strategy | 필수 | ⬜ |
+| 4 | Semantic Lock 구현 | 04-2-lock-strategy | 필수 | ✅ 완료 |
 | 5 | **Redis Lock 핵심 함정** ★ 보강 | 12-redis-lock-pitfalls | 필수 | ⬜ |
 | 6 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ⬜ |
 | 7 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⭐선택 | ⬜ |
@@ -159,6 +159,12 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | ErrorCode 확장 | `common/.../exception/ErrorCode.java` | LOCK_ACQUISITION_FAILED, SERVICE_UNAVAILABLE 등 추가 |
 | RuntimeException 제거 | 각 ServiceClient, InventoryService | BusinessException으로 교체 (표준화된 에러 처리) |
 | ComponentScan 추가 | Order/Inventory/Payment Application | GlobalExceptionHandler 스캔 설정 |
+| **Semantic Lock 필드** | `service-inventory/.../entity/Inventory.java` | reservationStatus, sagaId, lockAcquiredAt |
+| **ReservationStatus enum** | `service-inventory/.../entity/ReservationStatus.java` | AVAILABLE, RESERVING, RESERVED |
+| **Semantic Lock 메소드** | `service-inventory/.../entity/Inventory.java` | acquireSemanticLock, releaseSemanticLockOnSuccess/Failure, validateSagaOwnership |
+| **sagaId 전달** | `orchestrator-pure/.../saga/OrderSagaOrchestrator.java` | generateSagaId() + 모든 inventory 호출에 sagaId 전달 |
+| **sagaId 파라미터** | `InventoryServiceClient, InventoryController` | cancelReservation에 sagaId 추가 |
+| **DB 마이그레이션** | `V3__add_semantic_lock_fields.sql` | reservation_status, saga_id, lock_acquired_at 컬럼 |
 
 **학습 포인트 정리**:
 
@@ -204,6 +210,16 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - **ErrorCode 표준화**: 모든 예외에 코드+메시지 구조 적용
 - **ComponentScan 필요성**: common 모듈의 @RestControllerAdvice는 명시적 스캔 필요
 
+*Step 4 (Semantic Lock):*
+- **RLock 해제 ~ 트랜잭션 커밋 사이 GAP 보호**: 핵심 존재 이유
+- **상태 전이**: AVAILABLE → RESERVING → RESERVED → AVAILABLE
+  - RESERVING: 예약 작업 중 (RLock 내)
+  - RESERVED: 예약 완료, 확정 대기 (RLock 해제 후)
+- **sagaId**: Saga 실행마다 고유 ID 생성 (SAGA-XXXXXXXX 형식)
+- **소유권 검증**: 다른 Saga가 작업 중인 리소스 접근 차단
+- **버그 주의**: acquireSemanticLock()에서 RESERVED 상태도 체크 필수
+  - RESERVING만 체크하면 예약 완료 후 ~ 확정 전 구간에서 다른 Saga 침범 가능
+
 **📊 Day 2 현재 구현 상태 분석** (2026-02-03 코드 검토 완료):
 
 | 항목 | 위치 | 상태 | 비고 |
@@ -215,7 +231,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | Resilience4j | 각 ServiceClient | ✅ 완료 | Retry + CircuitBreaker |
 | 멱등성 | IdempotencyService | ✅ 완료 | Redis 기반 |
 | **GlobalExceptionHandler** | common/exception | ✅ 완료 | BusinessException, OptimisticLock 처리 |
-| Semantic Lock 필드 | Inventory 엔티티 | ❌ 없음 | reservationStatus, sagaId 추가 필요 |
+| **Semantic Lock 필드** | Inventory 엔티티 | ✅ 완료 | reservationStatus, sagaId, lockAcquiredAt |
 | 세마포어 | PaymentService | ❌ 없음 | PG 호출 제한 필요 |
 
 **🔧 Day 2 남은 구현 작업**: (2026-02-03 재조정)
@@ -235,22 +251,25 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 └── ComponentScan 추가 (Order, Inventory, Payment Application)
 ```
 
-*Step 4 (Semantic Lock 구현 계획):*
+*Step 4 (Semantic Lock 구현):* ✅ 완료 (2026-02-04)
 ```
-1. Flyway 마이그레이션 추가:
-   - V4__add_semantic_lock_fields.sql
-   - reservation_status, saga_id, lock_acquired_at 컬럼
+[완료된 항목]
+├── V3__add_semantic_lock_fields.sql: reservation_status, saga_id, lock_acquired_at 컬럼
+├── ReservationStatus enum: AVAILABLE, RESERVING, RESERVED
+├── Inventory 엔티티 Semantic Lock 메소드:
+│   ├── acquireSemanticLock(sagaId) - RESERVING/RESERVED 상태 체크 후 락 획득
+│   ├── releaseSemanticLockOnSuccess(sagaId) - 성공 시 RESERVED로 전환
+│   ├── releaseSemanticLockOnFailure(sagaId) - 실패 시 AVAILABLE로 복귀
+│   ├── validateSagaOwnership(sagaId) - Saga 소유권 검증
+│   └── clearSemanticLock() - 확정 시 완전 해제
+├── InventoryService: sagaId 파라미터 사용 (reserveStock, confirmReservation, cancelReservation)
+├── InventoryController: sagaId 필수 파라미터
+├── InventoryServiceClient: cancelReservation에 sagaId 추가
+└── OrderSagaOrchestrator: generateSagaId() + 모든 inventory 호출에 sagaId 전달
 
-2. Inventory 엔티티 수정:
-   - ReservationStatus enum (AVAILABLE, RESERVING, RESERVED)
-   - acquireLock(), releaseLock(), validateSagaOwnership() 메소드
-
-3. InventoryService 수정:
-   - reserveStock(productId, quantity, sagaId) - sagaId 파라미터 추가
-   - confirmReservation, cancelReservation에 sagaId 검증 추가
-
-4. InventoryServiceClient + Orchestrator:
-   - sagaId 생성 및 전달 로직 추가
+[핵심 버그 수정]
+acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 체크
+(RESERVED 상태에서 다른 Saga 접근 방지)
 ```
 
 *Step 5 (Redis Lock 핵심 함정 - 보강됨):* ★ 중요

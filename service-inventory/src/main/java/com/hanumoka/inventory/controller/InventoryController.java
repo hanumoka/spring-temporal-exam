@@ -48,35 +48,38 @@ public class InventoryController {
     }
 
     /**
-     * 재고 예약 (Saga용)
+     * 재고 예약 (Saga용) - sagaId 필수
      */
     @PostMapping("/{productId}/reserve")
     public ApiResponse<Void> reserveStock(
             @PathVariable Long productId,
-            @RequestParam int quantity) {
-        inventoryService.reserveStock(productId, quantity);
+            @RequestParam int quantity,
+            @RequestParam String sagaId) {
+        inventoryService.reserveStock(productId, quantity, sagaId);
         return ApiResponse.success();
     }
 
     /**
-     * 예약 확정 (Saga용)
+     * 예약 확정 (Saga용) - sagaId 필수
      */
     @PostMapping("/{productId}/confirm")
     public ApiResponse<Void> confirmReservation(
             @PathVariable Long productId,
-            @RequestParam int quantity) {
-        inventoryService.confirmReservation(productId, quantity);
+            @RequestParam int quantity,
+            @RequestParam String sagaId) {
+        inventoryService.confirmReservation(productId, quantity, sagaId);
         return ApiResponse.success();
     }
 
     /**
-     * 예약 취소 - 보상 트랜잭션 (Saga용)
+     * 예약 취소 - 보상 트랜잭션 (Saga용) - sagaId 필수
      */
     @PostMapping("/{productId}/cancel")
     public ApiResponse<Void> cancelReservation(
             @PathVariable Long productId,
-            @RequestParam int quantity) {
-        inventoryService.cancelReservation(productId, quantity);
+            @RequestParam int quantity,
+            @RequestParam String sagaId) {
+        inventoryService.cancelReservation(productId, quantity, sagaId);
         return ApiResponse.success();
     }
 
@@ -114,7 +117,9 @@ public class InventoryController {
             String productName,
             int quantity,
             int reservedQuantity,
-            int availableQuantity
+            int availableQuantity,
+            String reservationStatus,
+            String sagaId
     ) {
         public static InventoryResponse from(Inventory inventory) {
             return new InventoryResponse(
@@ -123,7 +128,9 @@ public class InventoryController {
                     inventory.getProduct().getName(),
                     inventory.getQuantity(),
                     inventory.getReservedQuantity(),
-                    inventory.getAvailableQuantity()
+                    inventory.getAvailableQuantity(),
+                    inventory.getReservationStatus().name(),
+                    inventory.getSagaId()
             );
         }
     }

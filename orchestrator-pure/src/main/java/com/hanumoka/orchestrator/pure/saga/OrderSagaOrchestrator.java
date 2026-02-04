@@ -9,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.UUID;
+
 /**
  * 주문 Saga 오케스트레이터
  *
@@ -32,7 +34,10 @@ public class OrderSagaOrchestrator {
      * Saga 실행
      */
     public OrderSagaResult execute(OrderSagaRequest request) {
-        log.info("========== Saga 시작 ==========");
+        // Saga ID 생성 (Semantic Lock 식별용)
+        String sagaId = generateSagaId();
+
+        log.info("========== Saga 시작 [sagaId={}] ==========", sagaId);
         log.info("요청: customerId={}, productId={}, quantity={}, amount={}",
                 request.customerId(), request.productId(),
                 request.quantity(), request.amount());
@@ -50,9 +55,9 @@ public class OrderSagaOrchestrator {
             orderId = orderClient.createOrder(request.customerId());
             log.info("[T1] 주문 생성 완료: orderId={}", orderId);
 
-            // T2: 재고 예약
+            // T2: 재고 예약 (sagaId 전달 - Semantic Lock)
             log.info("[T2] 재고 예약 시작");
-            inventoryClient.reserveStock(request.productId(), request.quantity());
+            inventoryClient.reserveStock(request.productId(), request.quantity(), sagaId);
             stockReserved = true;
             log.info("[T2] 재고 예약 완료");
 
@@ -74,9 +79,9 @@ public class OrderSagaOrchestrator {
             orderClient.confirmOrder(orderId);
             log.info("[T4] 주문 확정 완료");
 
-            // T5: 재고 확정 (예약 → 실제 차감)
+            // T5: 재고 확정 (예약 → 실제 차감, sagaId 전달 - Semantic Lock 검증)
             log.info("[T5] 재고 확정 시작");
-            inventoryClient.confirmReservation(request.productId(), request.quantity());
+            inventoryClient.confirmReservation(request.productId(), request.quantity(), sagaId);
             log.info("[T5] 재고 확정 완료");
 
             // T6: 결제 확정
@@ -84,14 +89,14 @@ public class OrderSagaOrchestrator {
             paymentClient.confirmPayment(paymentId);
             log.info("[T6] 결제 확정 완료");
 
-            log.info("========== Saga 성공 ==========");
+            log.info("========== Saga 성공 [sagaId={}] ==========", sagaId);
             return OrderSagaResult.success(orderId, paymentId);
 
         } catch (Exception e) {
-            log.error("========== Saga 실패: {} ==========", e.getMessage());
+            log.error("========== Saga 실패 [sagaId={}]: {} ==========", sagaId, e.getMessage());
 
             // ===== 보상 트랜잭션 (Compensation) - 역순 =====
-            compensate(orderId, stockReserved, paymentId, request);
+            compensate(orderId, stockReserved, paymentId, request, sagaId);
 
             return OrderSagaResult.failure(e.getMessage());
         }
@@ -101,10 +106,16 @@ public class OrderSagaOrchestrator {
      * 보상 트랜잭션 실행 (역순)
      *
      * 각 보상은 독립적으로 실행 (하나가 실패해도 나머지 계속 진행)
+     *
+     * @param orderId       주문 ID
+     * @param stockReserved 재고 예약 여부
+     * @param paymentId     결제 ID
+     * @param request       원본 요청
+     * @param sagaId        Saga 식별자 (Semantic Lock 해제용)
      */
     private void compensate(Long orderId, boolean stockReserved,
-                            Long paymentId, OrderSagaRequest request) {
-        log.info("========== 보상 트랜잭션 시작 ==========");
+                            Long paymentId, OrderSagaRequest request, String sagaId) {
+        log.info("========== 보상 트랜잭션 시작 [sagaId={}] ==========", sagaId);
 
         // C3: 결제 환불 (결제가 생성된 경우)
         if (paymentId != null) {
@@ -118,12 +129,12 @@ public class OrderSagaOrchestrator {
             }
         }
 
-        // C2: 재고 예약 취소 (예약이 완료된 경우)
+        // C2: 재고 예약 취소 (예약이 완료된 경우, sagaId로 Semantic Lock 해제)
         if (stockReserved) {
             try {
-                log.info("[C2] 재고 예약 취소 시작: productId={}, quantity={}",
-                        request.productId(), request.quantity());
-                inventoryClient.cancelReservation(request.productId(), request.quantity());
+                log.info("[C2] 재고 예약 취소 시작: productId={}, quantity={}, sagaId={}",
+                        request.productId(), request.quantity(), sagaId);
+                inventoryClient.cancelReservation(request.productId(), request.quantity(), sagaId);
                 log.info("[C2] 재고 예약 취소 완료");
             } catch (Exception e) {
                 log.error("[C2] 재고 예약 취소 실패: {}", e.getMessage());
@@ -141,6 +152,15 @@ public class OrderSagaOrchestrator {
             }
         }
 
-        log.info("========== 보상 트랜잭션 완료 ==========");
+        log.info("========== 보상 트랜잭션 완료 [sagaId={}] ==========", sagaId);
+    }
+
+    /**
+     * Saga ID 생성
+     *
+     * @return SAGA-XXXXXXXX 형식의 고유 식별자
+     */
+    private String generateSagaId() {
+        return "SAGA-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
 }
