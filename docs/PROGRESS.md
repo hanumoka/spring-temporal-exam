@@ -595,6 +595,15 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 | **FakeEmailGateway** | `service-notification/.../gateway/FakeEmailGateway.java` | Email 발송 시뮬레이션 |
 | **FakeSmsGateway** | `service-notification/.../gateway/FakeSmsGateway.java` | SMS 발송 시뮬레이션 |
 
+**문서 리팩토링 내역** (2026-02-05):
+
+| 수정 항목 | 파일 | 내용 |
+|----------|------|------|
+| Spring Boot 버전 통일 | `README.md`, `00-overview.md` | 3.4.0 → 3.5.9 |
+| Zipkin → Tempo 통일 | `README.md`, `00-overview.md`, `00-problem-recognition.md` | 분산 추적 기술 통일 |
+| 중복 파일 삭제 | `phase2b/05-opentelemetry-zipkin.md` | Tempo 문서만 유지 |
+| 선택 표시 추가 | `00-overview.md` | 분산 추적 [선택] 표시 |
+
 **학습 포인트 정리**:
 
 *Outbox 패턴 핵심:*

@@ -479,7 +479,7 @@ UPDATE inventory SET reserved = reserved - 5;
 | 장애 전파 | [03-resilience4j.md](./03-resilience4j.md) |
 | 동시성 경쟁 | [04-distributed-lock.md](./04-distributed-lock.md), [05-optimistic-lock.md](./05-optimistic-lock.md) |
 | 메시지 유실/중복 | [Phase 2-B: 04-outbox-pattern.md](../phase2b/04-outbox-pattern.md) |
-| 디버깅 추적 | [Phase 2-B: 05-opentelemetry-zipkin.md](../phase2b/05-opentelemetry-zipkin.md) |
+| 디버깅 추적 | [Phase 2-B: 05-opentelemetry-tempo.md](../phase2b/05-opentelemetry-tempo.md) [선택] |
 | 전체 문제 통합 해결 | [Phase 3: 01-temporal-concepts.md](../phase3/01-temporal-concepts.md) |
 | Temporal 한계와 보완 | [Phase 3: 03-temporal-limitations.md](../phase3/03-temporal-limitations.md) |
 

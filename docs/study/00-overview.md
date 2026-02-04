@@ -100,7 +100,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 │  ├── Redis Stream (MQ)                                          │
 │  ├── Redisson (분산 락)                                         │
 │  ├── Outbox 패턴                                                │
-│  ├── OpenTelemetry/Zipkin (분산 추적)                           │
+│  ├── OpenTelemetry/Grafana Tempo (분산 추적) [선택]             │
 │  ├── Prometheus/Grafana (메트릭)                                │
 │  ├── Loki (로그 수집)                                           │
 │  └── Alertmanager (알람)                                        │
@@ -158,7 +158,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 | Redis Stream | 메시지 큐 | 서비스 간 비동기 통신 |
 | Redisson | Redis Java 클라이언트 | 분산 락, 분산 자료구조 |
 | Outbox 패턴 | 이벤트 발행 신뢰성 | DB 저장과 이벤트 발행의 원자성 |
-| OpenTelemetry/Zipkin | 분산 추적 | 서비스 간 요청 흐름 파악 |
+| OpenTelemetry/Grafana Tempo | 분산 추적 [선택] | 서비스 간 요청 흐름 파악 |
 | Prometheus/Grafana | 메트릭 수집/시각화 | 시스템 상태 모니터링 |
 | Loki | 로그 수집 | 중앙 집중식 로그 관리 |
 | Alertmanager | 알람 설정 | 장애 감지 시 알림 |
@@ -256,7 +256,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 
 | 분류 | 기술 | 용도 |
 |------|------|------|
-| **프레임워크** | Spring Boot 3.4.0 | 애플리케이션 프레임워크 |
+| **프레임워크** | Spring Boot 3.5.9 | 애플리케이션 프레임워크 |
 | **언어** | Java 21 | 프로그래밍 언어 |
 | **빌드** | Gradle | 빌드 도구 (멀티모듈) |
 | **DB** | MySQL | 관계형 데이터베이스 |
@@ -266,7 +266,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 | **MQ** | Redis Stream | 메시지 큐 |
 | **장애 대응** | Resilience4j | 재시도, 서킷브레이커 |
 | **검증** | Bean Validation | 입력 값 검증 |
-| **분산 추적** | OpenTelemetry + Zipkin | 요청 추적 |
+| **분산 추적** | OpenTelemetry + Grafana Tempo [선택] | 요청 추적 |
 | **메트릭** | Micrometer + Prometheus | 메트릭 수집 |
 | **시각화** | Grafana | 대시보드 |
 | **로그** | Loki | 로그 수집 |
@@ -315,7 +315,7 @@ COMMIT  ← 하나라도 실패하면 전체 ROLLBACK
 - [02-redis-stream.md](./phase2b/02-redis-stream.md) - Redis Stream
 - [03-redisson.md](./phase2b/03-redisson.md) - Redisson
 - [04-outbox-pattern.md](./phase2b/04-outbox-pattern.md) - Outbox 패턴
-- [05-opentelemetry-zipkin.md](./phase2b/05-opentelemetry-zipkin.md) - 분산 추적
+- [05-opentelemetry-tempo.md](./phase2b/05-opentelemetry-tempo.md) - 분산 추적 [선택]
 - [06-prometheus-grafana.md](./phase2b/06-prometheus-grafana.md) - 메트릭
 - [07-loki.md](./phase2b/07-loki.md) - 로그 수집
 - [08-alertmanager.md](./phase2b/08-alertmanager.md) - 알람

@@ -16,7 +16,7 @@ MSA 환경에서 EDA 적용 시 발생하는 어려움을 해결하기 위한 �
 | 입력 검증 | Bean Validation |
 | DB 관리 | Flyway 마이그레이션 |
 | 설정 관리 | Spring Profiles |
-| Observability | MDC, OpenTelemetry/Zipkin |
+| Observability | MDC, OpenTelemetry/Grafana Tempo |
 | 모니터링 | Actuator, Micrometer, Prometheus, Grafana |
 | 로그 수집 | Loki |
 | 알람 | Alertmanager |
@@ -54,7 +54,7 @@ MSA 환경에서 EDA 적용 시 발생하는 어려움을 해결하기 위한 �
 
 | 구분 | 기술 |
 |------|------|
-| Framework | Spring Boot 3.4.0 |
+| Framework | Spring Boot 3.5.9 |
 | Language | Java 21 |
 | Database | MySQL (공유 DB + 스키마 분리) |
 | Cache/Lock | Redis + Redisson |
