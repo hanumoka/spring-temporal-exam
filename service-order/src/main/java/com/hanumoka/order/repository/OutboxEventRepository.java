@@ -103,4 +103,20 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
      * 상태별 이벤트 수 조회 (모니터링용)
      */
     long countByStatus(OutboxStatus status);
+
+    /**
+     * 최대 재시도 횟수를 초과한 FAILED 이벤트 조회 (DLQ 이동 대상)
+     *
+     * <p>재시도 횟수가 maxRetryCount 이상인 FAILED 이벤트를 조회합니다.
+     * 이 이벤트들은 DLQ로 이동 후 원본 테이블에서 삭제됩니다.</p>
+     *
+     * @param maxRetryCount 최대 재시도 횟수 (이 값 이상인 것만)
+     * @param pageable      페이징
+     * @return DLQ 이동 대상 이벤트 목록
+     */
+    @Query("SELECT e FROM OutboxEvent e WHERE e.status = 'FAILED' " +
+            "AND e.retryCount >= :maxRetryCount ORDER BY e.createdAt ASC")
+    List<OutboxEvent> findExhaustedFailedEvents(
+            @Param("maxRetryCount") int maxRetryCount,
+            Pageable pageable);
 }

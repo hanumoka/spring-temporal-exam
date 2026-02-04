@@ -39,6 +39,11 @@ public class OutboxSchedulers {
     private static final int RETRY_BATCH_SIZE = 50;
 
     /**
+     * DLQ 이동 배치 크기
+     */
+    private static final int DLQ_BATCH_SIZE = 100;
+
+    /**
      * 발행 완료 이벤트 보관 기간 (일)
      */
     private static final int DAYS_TO_KEEP = 7;
@@ -59,17 +64,30 @@ public class OutboxSchedulers {
     /**
      * 실패한 이벤트 재시도 (5분마다)
      *
+     * <h3>처리 순서</h3>
+     * <ol>
+     *   <li>최대 재시도 초과 이벤트 → DLQ 이동 (먼저 처리)</li>
+     *   <li>재시도 가능 이벤트 → 지수 백오프 후 PENDING으로 변경</li>
+     * </ol>
+     *
      * <h3>지수 백오프</h3>
      * <ul>
      *   <li>1회 실패: 2분 후 재시도</li>
      *   <li>2회 실패: 4분 후 재시도</li>
      *   <li>3회 실패: 8분 후 재시도</li>
-     *   <li>...</li>
-     *   <li>5회 실패: DLQ 이동 (현재는 로그만)</li>
+     *   <li>4회 실패: 16분 후 재시도</li>
+     *   <li>5회 실패: DLQ 이동</li>
      * </ul>
      */
     @Scheduled(fixedRate = 300000) // 5분마다
     public void retryFailedEvents() {
+        // 1. 먼저 exhausted 이벤트를 DLQ로 이동
+        int movedToDlq = outboxService.moveExhaustedEventsToDlq(MAX_RETRY_COUNT, DLQ_BATCH_SIZE);
+        if (movedToDlq > 0) {
+            log.warn("Outbox DLQ 이동 완료: {}개", movedToDlq);
+        }
+
+        // 2. 재시도 가능한 이벤트 처리
         List<OutboxEvent> failedEvents = outboxService.findFailedEventsForRetry(
                 MAX_RETRY_COUNT, RETRY_BATCH_SIZE);
 
@@ -80,17 +98,8 @@ public class OutboxSchedulers {
         log.info("재시도 대상 Outbox 이벤트: {}개", failedEvents.size());
 
         int retried = 0;
-        int movedToDlq = 0;
 
         for (OutboxEvent event : failedEvents) {
-            if (!event.canRetry(MAX_RETRY_COUNT)) {
-                // 최대 재시도 횟수 초과 → DLQ 이동 (현재는 로그만)
-                log.error("Outbox 이벤트 최대 재시도 초과 → DLQ 대상: id={}, retryCount={}, eventType={}",
-                        event.getId(), event.getRetryCount(), event.getEventType());
-                movedToDlq++;
-                continue;
-            }
-
             // 지수 백오프 체크
             if (shouldRetry(event)) {
                 outboxService.markForRetry(event.getId());
@@ -98,8 +107,8 @@ public class OutboxSchedulers {
             }
         }
 
-        if (retried > 0 || movedToDlq > 0) {
-            log.info("Outbox 재시도 처리 완료: 재시도 예약={}개, DLQ={}개", retried, movedToDlq);
+        if (retried > 0) {
+            log.info("Outbox 재시도 예약 완료: {}개", retried);
         }
     }
 

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hanumoka.order.entity.OutboxEvent;
 import com.hanumoka.order.entity.OutboxStatus;
+import com.hanumoka.order.entity.OutboxDeadLetter;
+import com.hanumoka.order.repository.OutboxDeadLetterRepository;
 import com.hanumoka.order.repository.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +44,7 @@ import java.util.List;
 public class OutboxService {
 
     private final OutboxEventRepository outboxRepository;
+    private final OutboxDeadLetterRepository deadLetterRepository;
     private final ObjectMapper objectMapper;
 
     /**
@@ -226,5 +229,62 @@ public class OutboxService {
     @Transactional(readOnly = true)
     public long countByStatus(OutboxStatus status) {
         return outboxRepository.countByStatus(status);
+    }
+
+    /**
+     * 최대 재시도 횟수 초과 이벤트를 DLQ로 이동
+     *
+     * <h3>워크플로우</h3>
+     * <ol>
+     *   <li>retryCount >= maxRetryCount인 FAILED 이벤트 조회</li>
+     *   <li>OutboxDeadLetter 테이블에 복사</li>
+     *   <li>원본 OutboxEvent 테이블에서 삭제</li>
+     * </ol>
+     *
+     * <h3>Why 같은 트랜잭션?</h3>
+     * <p>DLQ 저장과 원본 삭제가 원자적으로 처리되어야 데이터 손실/중복 방지</p>
+     *
+     * @param maxRetryCount 최대 재시도 횟수
+     * @param limit         최대 처리 수
+     * @return DLQ로 이동된 이벤트 수
+     */
+    @Transactional
+    public int moveExhaustedEventsToDlq(int maxRetryCount, int limit) {
+        List<OutboxEvent> exhaustedEvents = outboxRepository.findExhaustedFailedEvents(
+                maxRetryCount, PageRequest.of(0, limit));
+
+        if (exhaustedEvents.isEmpty()) {
+            return 0;
+        }
+
+        for (OutboxEvent event : exhaustedEvents) {
+            // DLQ에 이미 존재하는지 확인 (중복 방지)
+            if (deadLetterRepository.existsByOriginalId(event.getId())) {
+                log.warn("DLQ에 이미 존재하는 이벤트: id={}", event.getId());
+                outboxRepository.delete(event);
+                continue;
+            }
+
+            // DLQ로 복사
+            OutboxDeadLetter deadLetter = OutboxDeadLetter.from(event);
+            deadLetterRepository.save(deadLetter);
+
+            log.error("Outbox 이벤트 DLQ 이동: id={}, eventType={}, retryCount={}, lastError={}",
+                    event.getId(), event.getEventType(), event.getRetryCount(), event.getLastError());
+
+            // 원본 삭제
+            outboxRepository.delete(event);
+        }
+
+        log.warn("Outbox DLQ 이동 완료: {}개 이벤트", exhaustedEvents.size());
+        return exhaustedEvents.size();
+    }
+
+    /**
+     * DLQ 미해결 수 조회 (모니터링/알림용)
+     */
+    @Transactional(readOnly = true)
+    public long countUnresolvedDlq() {
+        return deadLetterRepository.countByResolvedFalse();
     }
 }
