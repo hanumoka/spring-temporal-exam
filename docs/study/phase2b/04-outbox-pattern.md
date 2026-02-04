@@ -1489,6 +1489,105 @@ public class OrderWorkflowImpl implements OrderWorkflow {
 
 ---
 
+## 12. 현재 구현 상태 (2026-02-05)
+
+### 12.1 구현 완료 항목
+
+| 항목 | 파일 | 설명 |
+|------|------|------|
+| Outbox 테이블 | `V3__create_outbox_event_table.sql` | 기본 스키마 |
+| PROCESSING 컬럼 | `V4__add_outbox_processing_columns.sql` | processed_at, last_failed_at 추가 |
+| OutboxStatus | `OutboxStatus.java` | PENDING, **PROCESSING**, PUBLISHED, FAILED |
+| OutboxEvent | `OutboxEvent.java` | markAsProcessing(), markAsTimedOut() 추가 |
+| OutboxEventRepository | `OutboxEventRepository.java` | findTimedOutProcessingEvents() 추가 |
+| OutboxService | `OutboxService.java` | claimPendingEvents(), recoverTimedOutEvents() |
+| OutboxPollingPublisher | `OutboxPollingPublisher.java` | Redis Stream 발행 |
+| OutboxSchedulers | `OutboxSchedulers.java` | 재시도 + 타임아웃 복구 + 정리 |
+
+### 12.2 핵심 개선: PROCESSING 상태 도입
+
+**문제: 트랜잭션 경계와 중복 발행**
+
+```
+기존 문제:
+1. findPendingEvents() → 트랜잭션 A 시작, FOR UPDATE 락 획득
+2. return events → 트랜잭션 A 종료, 락 해제 ⚠️
+3. publishToRedisStream() → 락 없이 실행
+4. markAsPublished() → 트랜잭션 B 시작
+
+결과: T2~T3 사이에 다른 인스턴스가 같은 이벤트 조회 가능 → 중복 발행!
+```
+
+**해결: claimPendingEvents()로 트랜잭션 내 상태 변경**
+
+```java
+// OutboxService.java
+@Transactional
+public List<OutboxEvent> claimPendingEvents(int limit) {
+    // 1. FOR UPDATE SKIP LOCKED로 조회 + 락 획득
+    List<OutboxEvent> events = outboxRepository.findPendingEventsForUpdate(...);
+
+    // 2. 같은 트랜잭션 내에서 PROCESSING으로 변경
+    for (OutboxEvent event : events) {
+        event.markAsProcessing();
+    }
+
+    return events;
+    // 3. 트랜잭션 커밋 → 락 해제되어도 상태는 PROCESSING
+}
+```
+
+**개선된 상태 흐름:**
+
+```
+PENDING → PROCESSING → PUBLISHED (정상)
+              │
+              └→ FAILED → PENDING (재시도)
+
+PROCESSING → PENDING (5분 타임아웃 시 복구)
+```
+
+### 12.3 지수 백오프 개선
+
+**기존 문제:** `createdAt` 기준으로 계산 → 부정확한 재시도 타이밍
+
+**개선:** `lastFailedAt` 기준으로 계산
+
+```java
+// OutboxSchedulers.java
+private boolean shouldRetry(OutboxEvent event) {
+    LocalDateTime lastFailedAt = event.getLastFailedAt();
+    if (lastFailedAt == null) return true;  // 하위 호환성
+
+    long waitMinutes = (long) Math.pow(2, event.getRetryCount());
+    LocalDateTime retryAfter = lastFailedAt.plus(Duration.ofMinutes(waitMinutes));
+    return LocalDateTime.now().isAfter(retryAfter);
+}
+```
+
+### 12.4 TODO (미구현 항목)
+
+| 항목 | 설명 | 우선순위 |
+|------|------|----------|
+| **FAILED → DLQ** | 최대 재시도 초과 시 별도 테이블 이동 | 필수 |
+| **오래된 PENDING 알림** | 1시간+ PENDING 이벤트 모니터링 | 권장 |
+| Notification Consumer | Redis Stream 구독 서비스 | 필수 |
+| 알림 연동 | Slack/Email 알림 | 선택 |
+
+### 12.5 학습 포인트
+
+> **FOR UPDATE SKIP LOCKED는 트랜잭션 내에서만 유효합니다.**
+>
+> 트랜잭션이 종료되면 락도 함께 해제되므로, 락을 획득한 후 수행할 모든 작업이
+> **같은 트랜잭션 내에 있거나**, 상태를 변경하여 다른 인스턴스가 조회하지 못하도록 해야 합니다.
+
+> **PROCESSING 상태의 역할:**
+>
+> 락이 해제된 후에도 다른 인스턴스가 `WHERE status = 'PENDING'` 쿼리로
+> 같은 이벤트를 조회하지 못하도록 합니다.
+
+---
+
 ## 다음 단계
 
 [05-opentelemetry-zipkin.md](./05-opentelemetry-zipkin.md) - 분산 추적으로 이동

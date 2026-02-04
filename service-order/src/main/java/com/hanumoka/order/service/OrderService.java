@@ -1,5 +1,6 @@
 package com.hanumoka.order.service;
 
+import com.hanumoka.common.event.OrderCreatedEvent;
 import com.hanumoka.common.exception.BusinessException;
 import com.hanumoka.common.exception.ErrorCode;
 import com.hanumoka.order.entity.Order;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,9 +22,19 @@ import java.util.UUID;
 public class OrderService {
 
     private final OrderRepository orderRepository;
+    private final OutboxService outboxService;
 
     /**
      * 주문 생성
+     *
+     * <h3>Outbox 패턴 적용</h3>
+     * <ol>
+     *   <li>주문 저장 (DB)</li>
+     *   <li>Outbox 이벤트 저장 (같은 트랜잭션)</li>
+     *   <li>별도 Publisher가 Outbox → Redis Stream으로 발행</li>
+     * </ol>
+     *
+     * <p>트랜잭션 원자성으로 이중 쓰기 문제 해결</p>
      */
     @Transactional
     public Order createOrder(Long customerId) {
@@ -34,8 +46,28 @@ public class OrderService {
                 .status(OrderStatus.PENDING)
                 .build();
 
+        // 1. 주문 저장
         Order savedOrder = orderRepository.save(order);
-        log.info("주문 생성 완료: orderNumber={}, customerId={}", orderNumber, customerId);
+
+        // 2. Outbox 이벤트 저장 (같은 트랜잭션!)
+        OrderCreatedEvent event = OrderCreatedEvent.builder()
+                .orderId(savedOrder.getId())
+                .orderNumber(savedOrder.getOrderNumber())
+                .customerId(savedOrder.getCustomerId())
+                .totalAmount(savedOrder.getTotalAmount())
+                .status(savedOrder.getStatus().name())
+                .occurredAt(LocalDateTime.now())
+                .build();
+
+        outboxService.save(
+                "Order",
+                savedOrder.getOrderNumber(),
+                "OrderCreated",
+                event
+        );
+
+        log.info("주문 생성 완료 (Outbox 이벤트 포함): orderNumber={}, customerId={}",
+                orderNumber, customerId);
 
         return savedOrder;
     }

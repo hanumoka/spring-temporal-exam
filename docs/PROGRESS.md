@@ -526,6 +526,54 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 - Outbox 패턴이 분산 트랜잭션을 어떻게 보완하는지
 - **CDC(Debezium)**: Polling의 한계 → binlog 기반 실시간 캡처
 
+**🆕 Outbox 좀비 데이터 대응** (2026-02-05 추가):
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Outbox 좀비 데이터 대응 전략                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  [PROCESSING 좀비] Publisher 비정상 종료 시                          │
+│  ├── 원인: claimPendingEvents() 후 크래시                            │
+│  ├── 대응: recoverTimedOutEvents() 스케줄러 (1분마다)                │
+│  ├── 동작: 5분 이상 PROCESSING → PENDING 복구                        │
+│  └── 상태: ✅ 구현 완료                                              │
+│                                                                      │
+│  [FAILED 좀비] 최대 재시도 초과 시                                   │
+│  ├── 원인: 5회 재시도 후에도 실패                                    │
+│  ├── 대응: Dead Letter Queue (DLQ) 테이블 이동                       │
+│  ├── 동작: FAILED + retryCount >= 5 → DLQ 테이블 이동 + 알림         │
+│  └── 상태: ⬜ TODO (Day 4 구현 예정)                                  │
+│                                                                      │
+│  [PENDING 좀비] 장기간 미처리 시                                     │
+│  ├── 원인: 시스템 장애, Publisher 미작동                             │
+│  ├── 대응: 모니터링 스케줄러 (1시간마다)                             │
+│  ├── 동작: 1시간+ PENDING 이벤트 감지 → 알림 발송                    │
+│  └── 상태: ⬜ TODO (Day 4 구현 예정)                                  │
+│                                                                      │
+│  [PUBLISHED 정리] 오래된 완료 이벤트                                 │
+│  ├── 원인: 정상 처리된 이벤트 누적                                   │
+│  ├── 대응: cleanupOldEvents() 스케줄러 (매일 새벽 2시)               │
+│  ├── 동작: 7일 이상 PUBLISHED → 삭제                                 │
+│  └── 상태: ✅ 구현 완료                                              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Day 4 Outbox 구현 체크리스트**:
+
+| 항목 | 설명 | 우선순위 | 상태 |
+|------|------|----------|------|
+| Outbox 테이블 + Entity | 이벤트 저장 구조 | 필수 | ✅ 완료 |
+| Polling Publisher | PENDING → Redis Stream | 필수 | ✅ 완료 |
+| PROCESSING 상태 | 중복 발행 방지 | 필수 | ✅ 완료 |
+| PROCESSING 타임아웃 복구 | 5분 후 PENDING 복구 | 필수 | ✅ 완료 |
+| PUBLISHED 정리 | 7일 이후 삭제 | 필수 | ✅ 완료 |
+| 지수 백오프 재시도 | lastFailedAt 기준 계산 | 필수 | ✅ 완료 |
+| **FAILED → DLQ 이동** | 최대 재시도 초과 처리 | **필수** | ⬜ TODO |
+| **오래된 PENDING 알림** | 1시간+ PENDING 모니터링 | 권장 | ⬜ TODO |
+| DLQ 테이블 생성 | outbox_dead_letter | 필수 | ⬜ TODO |
+| 알림 연동 | Slack/Email 알림 | 선택 | ⬜ TODO |
+
 ---
 
 ### Day 5 - 2/6 (목) : Phase 2-B 완료 (Observability)
@@ -921,7 +969,10 @@ InventoryServiceClient.java:111
 ├── Saga 상태 테이블 (현재 진행 상황 저장)
 ├── Semantic Lock 타임아웃 정리 스케줄러
 ├── 보상 트랜잭션 재시도 로직
-└── Orchestrator 복구 메커니즘
+├── Orchestrator 복구 메커니즘
+├── Outbox FAILED → DLQ 테이블 이동 (outbox_dead_letter)
+├── Outbox 오래된 PENDING 모니터링 스케줄러
+└── 알림 연동 (Slack/Email)
 ```
 
 ### 미래 해결 계획
@@ -933,6 +984,8 @@ InventoryServiceClient.java:111
 | Dead Letter Queue | 실패한 보상 저장 → 백그라운드 재시도 → 최종 실패 시 알림 |
 | Saga 상태 테이블 | Orchestrator 복구 시 중단된 Saga 재개, 타임아웃 Saga 자동 보상 |
 | Semantic Lock 정리 스케줄러 | lockAcquiredAt + 30분 초과 시 자동 해제 |
+| **Outbox FAILED → DLQ** | 최대 재시도 초과 이벤트 별도 테이블 이동 + 알림 |
+| **Outbox PENDING 모니터링** | 1시간+ PENDING 이벤트 감지 → 알림 발송 |
 
 **Phase 3 Temporal 자동 해결:**
 | 문제 | Temporal 해결 방식 |
@@ -958,6 +1011,9 @@ InventoryServiceClient.java:111
 | Orchestrator 크래시 | ❌ 없음 | Saga 상태 테이블 | ✅ 자동 복구 |
 | 보상 트랜잭션 실패 | 로그만 남김 | DLQ + 재시도 + 알림 | ✅ 자동 재시도 |
 | Semantic Lock 타임아웃 | ❌ 없음 | 정리 스케줄러 | Saga 상태 연동 |
+| **Outbox PROCESSING 좀비** | ✅ 5분 타임아웃 복구 | - | - |
+| **Outbox FAILED 좀비** | 로그만 남김 | DLQ 테이블 + 알림 | - |
+| **Outbox PENDING 좀비** | ❌ 없음 | 모니터링 + 알림 | - |
 
 > 이것이 **"MSA/EDA의 어려움을 체험한 후 Temporal의 가치를 느끼는"** 학습 여정의 핵심입니다.
 
