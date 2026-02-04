@@ -116,7 +116,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | 3 | 낙관적 락 (@Version) + GlobalExceptionHandler | 05-optimistic-lock | 필수 | ✅ 완료 |
 | 4 | Semantic Lock 구현 | 04-2-lock-strategy | 필수 | ✅ 완료 |
 | 5 | **Redis Lock 핵심 함정** ★ 보강 | 12-redis-lock-pitfalls | 필수 | ⬜ |
-| 6 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ⬜ |
+| 6 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ✅ 완료 |
 | 7 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⭐선택 | ⬜ |
 
 **Step 3 상세 (2026-02-03 완료)**:
@@ -165,6 +165,10 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | **sagaId 전달** | `orchestrator-pure/.../saga/OrderSagaOrchestrator.java` | generateSagaId() + 모든 inventory 호출에 sagaId 전달 |
 | **sagaId 파라미터** | `InventoryServiceClient, InventoryController` | cancelReservation에 sagaId 추가 |
 | **DB 마이그레이션** | `V3__add_semantic_lock_fields.sql` | reservation_status, saga_id, lock_acquired_at 컬럼 |
+| **RSemaphore 설정** | `service-payment/.../application.yml` | permits: 10, wait-seconds: 5 |
+| **RSemaphore 적용** | `service-payment/.../service/PaymentService.java` | executeWithSemaphore() 헬퍼 메소드 |
+| **PG 호출 제한** | `service-payment/.../service/PaymentService.java` | approvePayment, refundPayment에 세마포어 적용 |
+| **PG_THROTTLED 에러** | `common/.../exception/ErrorCode.java` | 세마포어 획득 실패 시 에러 코드 |
 
 **학습 포인트 정리**:
 
@@ -220,7 +224,16 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 - **버그 주의**: acquireSemanticLock()에서 RESERVED 상태도 체크 필수
   - RESERVING만 체크하면 예약 완료 후 ~ 확정 전 구간에서 다른 Saga 침범 가능
 
-**📊 Day 2 현재 구현 상태 분석** (2026-02-03 코드 검토 완료):
+*Step 6 (세마포어 - RSemaphore):* ✅ 완료 (2026-02-04)
+- **RLock vs RSemaphore**: 1개 vs N개 동시 접근
+- **용도**: 외부 API Rate Limit 준수 (PG 동시 10개 제한 등)
+- **tryAcquire(permits, Duration)**: Redisson 3.52.0 권장 API (Duration 사용)
+- **trySetPermits()**: 멱등성 초기화 (이미 설정되어 있으면 무시)
+- **@PostConstruct**: 애플리케이션 시작 시 세마포어 초기화
+- **보상 트랜잭션 특성**: 세마포어 실패해도 내부 상태는 변경 (보상은 반드시 완료)
+- **finally에서 release()**: 획득한 경우에만 반환 (acquired 플래그 체크)
+
+**📊 Day 2 현재 구현 상태 분석** (2026-02-04 업데이트):
 
 | 항목 | 위치 | 상태 | 비고 |
 |------|------|------|------|
@@ -232,7 +245,7 @@ Fake PG 구현 시 두 패턴 모두 테스트 가능하도록 설계
 | 멱등성 | IdempotencyService | ✅ 완료 | Redis 기반 |
 | **GlobalExceptionHandler** | common/exception | ✅ 완료 | BusinessException, OptimisticLock 처리 |
 | **Semantic Lock 필드** | Inventory 엔티티 | ✅ 완료 | reservationStatus, sagaId, lockAcquiredAt |
-| 세마포어 | PaymentService | ❌ 없음 | PG 호출 제한 필요 |
+| **세마포어 (RSemaphore)** | PaymentService | ✅ 완료 | PG 동시 호출 제한 (permits=10) |
 
 **🔧 Day 2 남은 구현 작업**: (2026-02-03 재조정)
 

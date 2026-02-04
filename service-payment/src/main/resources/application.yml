@@ -27,3 +27,8 @@ payment:
   fake:
     delay-ms: 100        # PG 응답 지연 시간 (ms)
     failure-rate: 0.0    # 실패 확률 (0.0 ~ 1.0, 테스트용)
+
+  # 세마포어 설정 (PG 동시 호출 제한)
+  semaphore:
+    permits: 10          # 동시 PG 호출 허용 수
+    wait-seconds: 5      # 세마포어 대기 시간 (초)

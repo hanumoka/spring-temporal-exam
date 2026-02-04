@@ -49,6 +49,9 @@ public enum ErrorCode {
     // 결제
     // ========================================
     PAYMENT_FAILED("PAYMENT_001", "결제에 실패했습니다"),
+
+    /** 세마포어: PG 동시 호출 제한 초과 */
+    PG_THROTTLED("PAYMENT_002", "결제 요청이 많아 처리가 지연되고 있습니다. 잠시 후 다시 시도해주세요."),
     ;
 
     private final String code;
