@@ -395,7 +395,7 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 |------|------|----------|------|------|
 | 1 | **Redis Lock 핵심 함정** (Day 2 이월) | 12-redis-lock-pitfalls | 필수 | ✅ 완료 |
 | 2 | **Layer 3 멱등성 구현** ★ 신규 | 02-idempotency | 필수 | ✅ 완료 |
-| 3 | MDC 로깅 (traceId 기본 설정) | 08-mdc-logging | 필수 | ⬜ |
+| 3 | MDC 로깅 (traceId 기본 설정) | 08-mdc-logging | 필수 | ✅ 완료 |
 | 4 | **Contract Testing** (Pact) | 10-contract-testing | 필수 | ⬜ |
 | 5 | Bean Validation 입력 검증 | 06-bean-validation | ⭐선택 | ⬜ |
 | 6 | 글로벌 예외 처리 | 07-exception-handling | ⭐선택 | ⬜ |
@@ -443,6 +443,10 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 | **sagaId 전달** | `OrderSagaOrchestrator.java` | paymentClient 호출 4곳에 sagaId 전달 |
 | **@Idempotent 적용** | `InventoryController.java` | 3개 메서드에 @Idempotent + ResponseEntity |
 | **@Idempotent 적용** | `PaymentController.java` | 4개 메서드에 @Idempotent + ResponseEntity |
+| **RequestIdFilter** | `common/.../logging/RequestIdFilter.java` | traceId/sagaId MDC 관리 필터 |
+| **WebConfig (4개 서비스)** | 각 서비스 config 패키지 | Filter Bean 등록 |
+| **RestClient 헤더 전파** | `RestClientConfig.java` | X-Request-ID 헤더 전파 인터셉터 |
+| **logback-spring.xml (4개)** | 각 서비스 resources | MDC 로그 패턴 설정 |
 
 **학습 포인트 정리**:
 
@@ -470,6 +474,17 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
   - 키 없음 + required=true → 400 Bad Request
   - 중복 키 → 200 OK (캐시된 응답)
   - 새 키 → 200 OK (실행 + 캐싱)
+
+*Step 3 (MDC 로깅):*
+- **MDC (Mapped Diagnostic Context)**: ThreadLocal 기반 요청 추적
+- **RequestIdFilter**: 진입점에서 traceId 생성 또는 헤더에서 읽기
+  - X-Request-ID 헤더 있으면 → 해당 값 사용
+  - 없으면 → `REQ-XXXXXXXX` 형식으로 생성
+- **sagaId 연동**: 쿼리 파라미터에서 추출하여 MDC에 추가
+- **헤더 전파**: RestClient 인터셉터로 하위 서비스에 X-Request-ID 전달
+- **로그 패턴**: `[traceId][sagaId]` 형식으로 출력
+- **MDC.clear() 필수**: finally에서 정리 (스레드 풀 재사용 시 오염 방지)
+- **Gateway 역할**: 현재 Orchestrator가 진입점 역할 겸함 (학습용 단순화)
 
 ---
 
