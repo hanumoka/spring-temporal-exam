@@ -814,15 +814,15 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | # | 항목 | 상태 | 학습 문서 | 구분 | 비고 |
 |---|------|------|----------|------|------|
 | 1 | Redis 기초 학습 | 대기 | 01-redis-basics | 필수 | |
-| 2 | **Outbox 패턴 (Polling 방식)** | 대기 | 04-outbox-pattern | 필수 | 이중 쓰기 해결 |
-| 3 | Notification 서비스 구현 | 대기 | - | 필수 | |
-| 4 | Fake SMS/Email 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015) | 필수 | |
-| 5 | OpenTelemetry + **Grafana Tempo** | 대기 | 05-opentelemetry-tempo | 필수 | 분산 추적 |
-| 6 | **k6 성능 테스트** | 대기 | 09-performance-testing | 필수 | |
+| 2 | Redis Stream (Consumer Group) | 대기 | 02-redis-stream | 필수 | MQ 구현 |
+| 3 | Outbox 패턴 (Polling 방식) | 대기 | 04-outbox-pattern | 필수 | 이중 쓰기 해결 |
+| 4 | Notification 서비스 구현 | 대기 | - | 필수 | |
+| 5 | Fake SMS/Email 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015) | 필수 | |
+| 6 | OpenTelemetry + Grafana Tempo | 대기 | 05-opentelemetry-tempo | 필수 | 분산 추적 |
+| 7 | k6 성능 테스트 | 대기 | 09-performance-testing | 필수 | |
 | --- | --- 아래는 선택 항목 --- | --- | --- | --- | --- |
-| 7 | Redis Stream 학습 | 대기 | 02-redis-stream | 필수 | MQ 구현 |
 | 8 | Redisson 심화 | 대기 | 03-redisson | ⭐선택 | |
-| 9 | **🆕 CDC (Debezium) 전환** | 대기 | 04-1-cdc-debezium | ⭐선택 | Polling → CDC |
+| 9 | CDC (Debezium) 전환 | 대기 | 04-1-cdc-debezium | ⭐선택 | Polling → CDC |
 | 10 | Micrometer + Prometheus 연동 | 대기 | 06-prometheus-grafana | ⭐선택 | 운영 |
 | 11 | Grafana 대시보드 구성 | 대기 | 06-prometheus-grafana | ⭐선택 | 운영 |
 | 12 | Loki 로그 수집 연동 | 대기 | 07-loki | ⭐선택 | 운영 |
