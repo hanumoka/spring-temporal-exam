@@ -662,8 +662,8 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 │  ├── 02-temporal-spring     ← Spring 연동 + Saga 전환                       │
 │  └── 03-temporal-limitations← Temporal 한계와 보완 전략                     │
 │                                                                             │
-│  DevOps (1개 필수)                                                          │
-│  └── 01-github-actions      ← CI/CD 파이프라인                              │
+│  DevOps (선택)                                                              │
+│  └── 01-github-actions      ← CI/CD 파이프라인 (선택)                       │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════    │
 │  총 20개 항목 → "MSA 어려움 → Temporal 해결 + 한계 인식" 체감               │
@@ -718,7 +718,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 2-B | `04-1-cdc-debezium.md` | 🆕 Polling → CDC 전환 | **선택** | Outbox 학습 후 |
 | 2-B | `05-opentelemetry-tempo.md` | Zipkin → Grafana Tempo | 필수 | |
 | 2-B | `09-performance-testing.md` | k6 부하 테스트 | 필수 | |
-| DevOps | `01-github-actions.md` | CI/CD 파이프라인 | 필수 | |
+| DevOps | `01-github-actions.md` | CI/CD 파이프라인 | ⭐선택 | |
 | 고급 | `event-sourcing-cqrs.md` | 언제 쓰고 언제 안 쓰는지 | 선택 | |
 | 고급 | `api-gateway-auth.md` | Spring Cloud Gateway + JWT | 선택 | |
 
@@ -984,7 +984,7 @@ InventoryServiceClient.java:111
 
 | # | 항목 | 상태 | 학습 문서 | 비고 |
 |---|------|------|----------|------|
-| 1 | **GitHub Actions CI/CD** | 대기 | devops/01-github-actions | ★ 신규 |
+| 1 | GitHub Actions CI/CD | 대기 | devops/01-github-actions | ⭐선택 |
 | 2 | Docker 멀티스테이지 빌드 | 선택 | devops/02-docker-best-practices | |
 
 ---
