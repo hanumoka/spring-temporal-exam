@@ -2,8 +2,8 @@
 
 ## 현재 상태
 
-- **현재 Phase**: Phase 2-A - 동기 REST 기반 Saga
-- **마지막 업데이트**: 2026-02-04 (일정 재조정: Layer 3 멱등성 추가)
+- **현재 Phase**: Phase 2-B - MQ + Redis + Observability (진행 중)
+- **마지막 업데이트**: 2026-02-05 (Day 4 완료: Outbox + DLQ + Notification)
 - **Spring Boot**: 3.5.9
 - **목표 완료일**: 2026-02-08 (토) - 7일 확장
 
@@ -21,7 +21,7 @@
 │   Phase 1        Phase 2-A        Phase 2-B        Phase 3                 │
 │   ─────────      ──────────       ──────────       ─────────               │
 │   기반 구축   →   문제 직면    →   심화 문제   →   해결책 체감              │
-│   (완료)         (진행 중)        (대기)          (대기)                    │
+│   (완료)         (완료)          (진행 중)        (대기)                    │
 │                                                                             │
 │   + DevOps: CI/CD + 성능 테스트 (Phase 2-B와 병행)                          │
 │                                                                             │
@@ -574,6 +574,52 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 | **오래된 PENDING 알림** | 1시간+ PENDING 모니터링 | 권장 | ⬜ TODO |
 | 알림 연동 | Slack/Email 알림 | 선택 | ⬜ TODO |
 
+**✅ Day 4 구현 완료 내역** (2026-02-05):
+
+| 구현 항목 | 파일 | 설명 |
+|----------|------|------|
+| **Outbox 테이블** | `V1__create_outbox_table.sql` | 이벤트 저장 테이블 |
+| **OutboxEvent 엔티티** | `service-order/.../entity/OutboxEvent.java` | PENDING/PROCESSING/PUBLISHED/FAILED 상태 |
+| **OutboxStatus enum** | `service-order/.../entity/OutboxStatus.java` | 상태 정의 + PROCESSING 추가 |
+| **OutboxService** | `service-order/.../service/OutboxService.java` | claimPendingEvents, markAsPublished 등 |
+| **OutboxPollingPublisher** | `service-order/.../publisher/OutboxPollingPublisher.java` | 1초마다 폴링 → Redis Stream 발행 |
+| **OutboxSchedulers** | `service-order/.../scheduler/OutboxSchedulers.java` | 재시도, 타임아웃 복구, 정리 |
+| **V4 마이그레이션** | `V4__add_outbox_processing_columns.sql` | processed_at, last_failed_at 컬럼 |
+| **OutboxDeadLetter 엔티티** | `service-order/.../entity/OutboxDeadLetter.java` | DLQ 저장 엔티티 |
+| **OutboxDeadLetterRepository** | `service-order/.../repository/OutboxDeadLetterRepository.java` | DLQ 조회/통계 |
+| **V5 마이그레이션** | `V5__create_outbox_dead_letter_table.sql` | DLQ 테이블 생성 |
+| **V6 마이그레이션** | `V6__add_dlq_original_id_unique.sql` | original_id UNIQUE 제약 |
+| **RedisStreamConfig** | `service-notification/.../config/RedisStreamConfig.java` | Consumer Group 초기화 |
+| **OrderEventStreamConsumer** | `service-notification/.../consumer/OrderEventStreamConsumer.java` | Redis Stream 폴링 Consumer |
+| **NotificationService** | `service-notification/.../service/NotificationService.java` | 알림 발송 로직 |
+| **FakeEmailGateway** | `service-notification/.../gateway/FakeEmailGateway.java` | Email 발송 시뮬레이션 |
+| **FakeSmsGateway** | `service-notification/.../gateway/FakeSmsGateway.java` | SMS 발송 시뮬레이션 |
+
+**학습 포인트 정리**:
+
+*Outbox 패턴 핵심:*
+- **이중 쓰기 문제 해결**: 비즈니스 데이터 + Outbox 이벤트를 같은 트랜잭션으로 저장
+- **FOR UPDATE SKIP LOCKED**: 다중 인스턴스 환경에서 중복 처리 방지
+- **PROCESSING 상태**: 락 해제 후에도 다른 인스턴스가 중복 조회 방지
+- **트랜잭션 경계**: claimPendingEvents()에서 조회 + 상태 변경을 단일 트랜잭션으로
+
+*DLQ (Dead Letter Queue) 핵심:*
+- **목적**: 최대 재시도 초과 이벤트 → 별도 테이블로 이동 → 운영자 확인
+- **원자성**: DLQ 저장 + 원본 삭제를 같은 트랜잭션으로 처리
+- **중복 방지**: existsByOriginalId() + UNIQUE 제약으로 이중 보장
+- **워크플로우**: FAILED (retry>=5) → DLQ 이동 → 운영자 확인 → 수동 처리 → resolved
+
+*Redis Stream Consumer 핵심:*
+- **Consumer Group**: 같은 그룹 내 Consumer들이 메시지를 분산 처리
+- **XREADGROUP**: 새 메시지 읽기 (>)
+- **XACK**: 처리 완료 후 확인 (PEL에서 제거)
+- **Pending 재처리**: ACK 안 된 메시지는 PEL에 남아 재처리 대상
+
+*Fake Gateway 패턴:*
+- **지연 시뮬레이션**: 외부 API 호출 시간 재현
+- **실패율 시뮬레이션**: 랜덤 실패로 에러 처리 테스트
+- **설정 기반**: application.yml에서 delay-ms, failure-rate 조절
+
 ---
 
 ### Day 5 - 2/6 (목) : Phase 2-B 완료 (Observability)
@@ -628,30 +674,30 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 
 ---
 
-## 일정 요약 ★ 2026-02-04 재조정
+## 일정 요약 ★ 2026-02-05 업데이트
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    7일 학습 일정 요약 (2026-02-04 재조정)                      │
+│                    7일 학습 일정 요약 (2026-02-05 업데이트)                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  Day 1 (2/2 일): Phase 2-A 핵심 ✅                                          │
 │  ├── 멱등성, Resilience4j, 분산 락(RLock)                                   │
 │  └── "재시도의 전제조건" 이해                                                │
 │                                                                             │
-│  Day 2 (2/3 월): Phase 2-A 심화 ✅ (세마포어까지 완료)                       │
-│  ├── Saga Isolation → 낙관적 락 → Semantic Lock → 세마포어 ✅               │
+│  Day 2 (2/3 월): Phase 2-A 심화 ✅                                          │
+│  ├── Saga Isolation → 낙관적 락 → Semantic Lock → 세마포어                  │
 │  └── 핵심: "락이 왜 필요한가?" 문제 인식 후 해결책 구현                      │
 │                                                                             │
-│  Day 3 (2/4 화): Phase 2-A 완료 ★ Layer 3 멱등성 추가                       │
-│  ├── [완료] Redis Lock 핵심 함정 - 커밋 후 락 해제 패턴 적용 ✅             │
-│  ├── [완료] Layer 3 멱등성 구현 (Orchestrator → 각 서비스) ✅               │
-│  ├── [필수] MDC 로깅 / [선택] Contract Testing                              │
-│  └── [선택] Bean Validation, 예외 처리, TransactionTemplate                 │
+│  Day 3 (2/4 화): Phase 2-A 완료 ✅                                          │
+│  ├── Redis Lock 핵심 함정 - 커밋 후 락 해제 패턴 적용                       │
+│  ├── Layer 3 멱등성 구현 (Orchestrator → 각 서비스)                         │
+│  └── MDC 로깅 (traceId/sagaId 추적)                                         │
 │                                                                             │
-│  Day 4 (2/5 수): Phase 2-B 전반                                             │
-│  ├── Redis 기초, Stream, Redisson                                          │
-│  └── Outbox 패턴, Notification 서비스                                       │
+│  Day 4 (2/5 수): Phase 2-B 전반 ✅                                          │
+│  ├── Redis 기초/Stream 학습, Outbox 패턴 구현                               │
+│  ├── DLQ (Dead Letter Queue) 구현                                           │
+│  └── Notification 서비스 + Fake SMS/Email Gateway                           │
 │                                                                             │
 │  Day 5 (2/6 목): Phase 2-B 후반 (Observability)                             │
 │  ├── OpenTelemetry + Grafana Tempo (분산 추적)                              │
@@ -861,11 +907,11 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 
 | # | 항목 | 상태 | 학습 문서 | 구분 | 비고 |
 |---|------|------|----------|------|------|
-| 1 | Redis 기초 학습 | 대기 | 01-redis-basics | 필수 | |
-| 2 | Redis Stream (Consumer Group) | 대기 | 02-redis-stream | 필수 | MQ 구현 |
-| 3 | Outbox 패턴 (Polling 방식) | 대기 | 04-outbox-pattern | 필수 | 이중 쓰기 해결 |
-| 4 | Notification 서비스 구현 | 대기 | - | 필수 | |
-| 5 | Fake SMS/Email 구현체 작성 | 대기 | [D015](./architecture/DECISIONS.md#d015) | 필수 | |
+| 1 | Redis 기초 학습 | ✅ 완료 | 01-redis-basics | 필수 | Day 4 |
+| 2 | Redis Stream (Consumer Group) | ✅ 완료 | 02-redis-stream | 필수 | Day 4 |
+| 3 | Outbox 패턴 (Polling 방식) | ✅ 완료 | 04-outbox-pattern | 필수 | Day 4 + DLQ |
+| 4 | Notification 서비스 구현 | ✅ 완료 | - | 필수 | Day 4 |
+| 5 | Fake SMS/Email 구현체 작성 | ✅ 완료 | [D015](./architecture/DECISIONS.md#d015) | 필수 | Day 4 |
 | 6 | OpenTelemetry + Grafana Tempo | 대기 | 05-opentelemetry-tempo | 필수 | 분산 추적 |
 | 7 | k6 성능 테스트 | 대기 | 09-performance-testing | 필수 | |
 | --- | --- 아래는 선택 항목 --- | --- | --- | --- | --- |
@@ -915,7 +961,7 @@ services:
 
 ---
 
-## 현재 구현의 안전성 분석 ★ 2026-02-04
+## 현재 구현의 안전성 분석 ★ 2026-02-05 업데이트
 
 > **결론: 100% 안전하지 않음** - 학습용 기본 구현 (Happy Path 중심)
 
