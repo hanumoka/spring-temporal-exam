@@ -713,6 +713,102 @@ services:
 
 ---
 
+## 현재 구현의 안전성 분석 ★ 2026-02-04
+
+> **결론: 100% 안전하지 않음** - 학습용 기본 구현 (Happy Path 중심)
+
+### 다양한 실패 케이스
+
+| 실패 유형 | 발생 위치 | 현재 대응 | 문제점 |
+|----------|----------|----------|--------|
+| **분산 락 획득 실패** | InventoryService.executeWithLock() | LOCK_ACQUISITION_FAILED 예외 | 보상 중에도 락 실패 가능 → 재고 묶임 |
+| **낙관적 락 실패** | JPA save() 시점 | 409 Conflict | 보상 중에도 충돌 가능, 재시도 없음 |
+| **세마포어 획득 실패** | PaymentService.executeWithSemaphore() | 정방향: 예외 / 보상: 계속 진행 | PG 환불 안 되고 내부만 환불 상태 |
+| **네트워크 오류** | 모든 REST 호출 | Retry 3회 + CircuitBreaker | 응답 유실 시 이중 처리 가능 |
+| **Orchestrator 크래시** | Saga 실행 중 | ❌ 대응 없음 | Semantic Lock 영구 잠김, 환불 안 됨 |
+| **Semantic Lock 타임아웃** | Inventory 엔티티 | ❌ 정리 없음 | 오래된 락 영구 지속 |
+
+### Orchestrator 크래시 시나리오 (가장 심각)
+
+```
+T2 완료 후 크래시 (재고 예약 완료):
+├── Semantic Lock: RESERVED 상태로 영구 잠김
+├── 재고: 예약된 상태 (다른 주문 불가)
+└── 보상: 실행 안 됨
+
+T3 완료 후 크래시 (결제 승인 완료):
+├── 고객 돈: 빠져나감
+├── 주문: 미확정 상태
+└── 보상: 실행 안 됨 → 환불 안 됨
+
+보상 중간에 크래시:
+├── C3(환불) 완료 후 크래시 → C2, C1 미실행
+└── 재고 예약 해제 안 됨, 주문 취소 안 됨
+```
+
+### 보상 트랜잭션 실패 시 결과
+
+| 실패한 보상 | 결과 | 심각도 |
+|------------|------|--------|
+| C3 (결제 환불) | 고객 돈 미반환 | 🔴 심각 |
+| C2 (재고 취소) | Semantic Lock 잠김, 재고 묶임 | 🟠 높음 |
+| C1 (주문 취소) | 주문 상태 불일치 | 🟡 중간 |
+
+### 현재 미구현 사항 (TODO)
+
+```
+PaymentService.java:218, 224
+└── // TODO: Dead Letter Queue에 저장
+
+InventoryServiceClient.java:111
+└── // TODO: Dead Letter Queue에 저장
+
+[암묵적 TODO]
+├── Saga 상태 테이블 (현재 진행 상황 저장)
+├── Semantic Lock 타임아웃 정리 스케줄러
+├── 보상 트랜잭션 재시도 로직
+└── Orchestrator 복구 메커니즘
+```
+
+### 미래 해결 계획
+
+**Phase 2-B 해결책:**
+| 해결책 | 대상 문제 |
+|--------|----------|
+| Outbox 패턴 | 이벤트 발행 신뢰성, "DB 저장 + 이벤트 발행" 원자성 |
+| Dead Letter Queue | 실패한 보상 저장 → 백그라운드 재시도 → 최종 실패 시 알림 |
+| Saga 상태 테이블 | Orchestrator 복구 시 중단된 Saga 재개, 타임아웃 Saga 자동 보상 |
+| Semantic Lock 정리 스케줄러 | lockAcquiredAt + 30분 초과 시 자동 해제 |
+
+**Phase 3 Temporal 자동 해결:**
+| 문제 | Temporal 해결 방식 |
+|------|-------------------|
+| Orchestrator 크래시 복구 | Workflow 상태가 Server에 저장, 재시작 시 자동 재개 |
+| 보상 트랜잭션 자동 재시도 | Activity 실패 시 자동 재시도 (configurable) |
+| Saga 상태 추적 | Temporal UI에서 현재 진행 상황 확인, 수동 재시작 가능 |
+
+**Temporal도 해결 못하는 것 (Phase 2 기술 필요):**
+- 분산 락 (Redis RLock)
+- 멱등성 (Idempotency Key)
+- 외부 API Rate Limit (세마포어)
+- 낙관적 락 (@Version)
+
+### 실패 케이스 대응 현황 요약
+
+| 실패 유형 | 현재 대응 | Phase 2-B | Phase 3 (Temporal) |
+|----------|----------|-----------|-------------------|
+| 분산 락 획득 실패 | 예외 발생 | 재시도 + DLQ | - |
+| 낙관적 락 실패 | 409 응답 | 자동 재시도 | - |
+| 세마포어 획득 실패 | 예외/계속진행 | DLQ + 수동처리 | - |
+| 네트워크 오류 | Retry 3회 | Outbox + 멱등성 강화 | Activity 재시도 |
+| Orchestrator 크래시 | ❌ 없음 | Saga 상태 테이블 | ✅ 자동 복구 |
+| 보상 트랜잭션 실패 | 로그만 남김 | DLQ + 재시도 + 알림 | ✅ 자동 재시도 |
+| Semantic Lock 타임아웃 | ❌ 없음 | 정리 스케줄러 | Saga 상태 연동 |
+
+> 이것이 **"MSA/EDA의 어려움을 체험한 후 Temporal의 가치를 느끼는"** 학습 여정의 핵심입니다.
+
+---
+
 ## Phase 3: Temporal 연동
 
 ### 진행 현황
