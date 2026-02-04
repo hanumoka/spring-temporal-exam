@@ -396,7 +396,7 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 | 1 | **Redis Lock 핵심 함정** (Day 2 이월) | 12-redis-lock-pitfalls | 필수 | ✅ 완료 |
 | 2 | **Layer 3 멱등성 구현** ★ 신규 | 02-idempotency | 필수 | ✅ 완료 |
 | 3 | MDC 로깅 (traceId 기본 설정) | 08-mdc-logging | 필수 | ✅ 완료 |
-| 4 | **Contract Testing** (Pact) | 10-contract-testing | 필수 | ⬜ |
+| 4 | Contract Testing (Pact) | 10-contract-testing | ⭐선택 | ⬜ |
 | 5 | Bean Validation 입력 검증 | 06-bean-validation | ⭐선택 | ⬜ |
 | 6 | 글로벌 예외 처리 | 07-exception-handling | ⭐선택 | ⬜ |
 | 7 | TransactionTemplate (프로그래밍 방식) | 09-transaction-template | ⭐선택 | ⬜ |
@@ -406,7 +406,7 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 - Layer 3 멱등성 구현 **신규 추가** (Orchestrator → 각 서비스)
   - 각 ServiceClient 호출 시 `{sagaId}-{step}` 키 전달
   - Resilience4j 재시도 시 중복 처리 방지
-- MDC 로깅, Contract Testing은 유지
+- MDC 로깅 유지, Contract Testing은 선택으로 변경 (실무 도입 장벽 고려)
 
 **Layer 3 멱등성 구현 계획**:
 ```
@@ -598,7 +598,7 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 │  Day 3 (2/4 화): Phase 2-A 완료 ★ Layer 3 멱등성 추가                       │
 │  ├── [완료] Redis Lock 핵심 함정 - 커밋 후 락 해제 패턴 적용 ✅             │
 │  ├── [완료] Layer 3 멱등성 구현 (Orchestrator → 각 서비스) ✅               │
-│  ├── [필수] MDC 로깅, Contract Testing                                      │
+│  ├── [필수] MDC 로깅 / [선택] Contract Testing                              │
 │  └── [선택] Bean Validation, 예외 처리, TransactionTemplate                 │
 │                                                                             │
 │  Day 4 (2/5 수): Phase 2-B 전반                                             │
@@ -647,7 +647,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 │  ├── 11-saga-isolation      ← ★ 분산락 직후! (락 필요성 이해)               │
 │  ├── 05-optimistic-lock     ← Lost Update 해결책                            │
 │  ├── 08-mdc-logging         ← ★ 앞으로 이동 (디버깅 기본)                   │
-│  └── 10-contract-testing    ← 서비스 간 계약 검증                           │
+│  └── 10-contract-testing    ← 서비스 간 계약 검증 (선택)                    │
 │                                                                             │
 │  ⚠️ 12-redis-lock-pitfalls는 "심화"로 재분류 (핵심만 Day 2에서 학습)        │
 │                                                                             │
@@ -713,7 +713,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | Phase | 문서 | 내용 | 우선순위 | 비고 |
 |-------|------|------|----------|------|
 | 2-A | `11-saga-isolation.md` | Saga Dirty Read, Lost Update | **필수** | ★ 분산락 직후 학습 |
-| 2-A | `10-contract-testing.md` | Pact 기반 계약 테스트 | 필수 | |
+| 2-A | `10-contract-testing.md` | Pact 기반 계약 테스트 | ⭐선택 | 실무 도입 장벽 |
 | 2-A | `12-redis-lock-pitfalls.md` | 10가지 함정과 해결책 | 핵심만 필수 | 심화는 선택 |
 | 2-B | `04-1-cdc-debezium.md` | 🆕 Polling → CDC 전환 | **선택** | Outbox 학습 후 |
 | 2-B | `05-opentelemetry-tempo.md` | Zipkin → Grafana Tempo | 필수 | |
@@ -733,7 +733,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 
 00-problem-recognition → 01-saga-pattern → 02-idempotency (Layer 1) → 03-resilience4j
 → 04-distributed-lock → 11-saga-isolation → 05-optimistic-lock
-→ 02-idempotency (Layer 3) ★ 신규 → 08-mdc-logging → 10-contract-testing
+→ 02-idempotency (Layer 3) ★ 신규 → 08-mdc-logging
 → 12-redis-lock-pitfalls
 
 [선택 경로 - 시간 여유 시]
@@ -795,7 +795,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 11 | Redis Lock 핵심 함정 (요약) | ✅ 완료 | 12-redis-lock-pitfalls | 필수 | 커밋 후 락 해제 패턴 |
 | **12** | **Layer 3 멱등성 구현** ★ 신규 | ✅ 완료 | 02-idempotency | **필수** | ServiceClient + Controller |
 | 13 | MDC 로깅 (traceId) | 대기 | 08-mdc-logging | 필수 | |
-| 14 | **Contract Testing** (Pact) | 대기 | 10-contract-testing | 필수 | 서비스 간 계약 |
+| 14 | Contract Testing (Pact) | 대기 | 10-contract-testing | ⭐선택 | 실무 도입 장벽 |
 | --- | --- 아래는 선택 항목 --- | --- | --- | --- | --- |
 | 15 | 대기열 + 세마포어 조합 (버퍼링) | 대기 | 04-1-queue-semaphore | ⭐선택 | 심화 |
 | 16 | Bean Validation 입력 검증 | 대기 | 06-bean-validation | ⭐선택 | Spring 기본 |
