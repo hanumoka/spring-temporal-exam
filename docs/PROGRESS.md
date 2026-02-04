@@ -177,7 +177,7 @@ Layer 3: Orchestrator → 각 서비스
 | 4 | Semantic Lock 구현 | 04-2-lock-strategy | 필수 | ✅ 완료 |
 | 5 | **Redis Lock 핵심 함정** ★ 보강 | 12-redis-lock-pitfalls | 필수 | ✅ 완료 |
 | 6 | 세마포어 (RSemaphore) - PG 호출 제한 | 04-distributed-lock | 필수 | ✅ 완료 |
-| 7 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | ⭐선택 | ⬜ |
+| 7 | 대기열 + 세마포어 조합 (버퍼링 패턴) | 04-1-queue-semaphore | 필수 | ⬜ |
 
 **Step 3 상세 (2026-02-03 완료)**:
 - @Version 필드: ✅ 이미 구현됨 (Inventory, Order, Payment)
@@ -681,7 +681,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  Phase 2-A 선택 (5개)                                                       │
-│  ├── 04-1-queue-semaphore    ← 대기열+세마포어 조합 (심화)                  │
+│  ├── 04-1-queue-semaphore    ← 대기열+세마포어 조합 (필수)                  │
 │  ├── 06-bean-validation      ← 입력 검증 (Spring 기본 지식)                 │
 │  ├── 07-exception-handling   ← 예외 처리 (Spring 기본 지식)                 │
 │  ├── 09-transaction-template ← 트랜잭션 템플릿 (Spring 심화)                │
@@ -737,7 +737,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 → 12-redis-lock-pitfalls
 
 [선택 경로 - 시간 여유 시]
-→ 04-1-queue-semaphore (심화)
+→ 04-1-queue-semaphore (필수)
 → 06-bean-validation, 07-exception-handling, 09-transaction-template (Spring 기본)
 ```
 
@@ -789,15 +789,15 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 5 | 멱등성 처리 (Idempotency Key) | ✅ 완료 | 02-idempotency | 필수 | AOP + Redis 기반 |
 | 6 | Resilience4j 재시도/타임아웃 | ✅ 완료 | 03-resilience4j | 필수 | Retry + CircuitBreaker + Fallback |
 | 7 | 재고 차감 분산 락 (RLock) | ✅ 완료 | 04-distributed-lock | 필수 | Watchdog + 헬퍼 메소드 |
-| **8** | **Saga Isolation (Dirty Read, Lost Update)** | 대기 | 11-saga-isolation | **필수** | ★ 순서 변경: 분산락 직후 |
-| **9** | **낙관적 락 (JPA @Version)** | 대기 | 05-optimistic-lock | **필수** | Lost Update 해결책 |
+| 8 | Saga Isolation (Dirty Read, Lost Update) | ✅ 완료 | 11-saga-isolation | 필수 | Day 2 완료 |
+| 9 | 낙관적 락 (JPA @Version) + GlobalExceptionHandler | ✅ 완료 | 05-optimistic-lock | 필수 | Day 2 완료 |
 | 10 | PG 호출 제한 세마포어 (RSemaphore) | ✅ 완료 | 04-distributed-lock | 필수 | 2026-02-04 완료 |
 | 11 | Redis Lock 핵심 함정 (요약) | ✅ 완료 | 12-redis-lock-pitfalls | 필수 | 커밋 후 락 해제 패턴 |
 | **12** | **Layer 3 멱등성 구현** ★ 신규 | ✅ 완료 | 02-idempotency | **필수** | ServiceClient + Controller |
-| 13 | MDC 로깅 (traceId) | 대기 | 08-mdc-logging | 필수 | |
+| 13 | MDC 로깅 (traceId) | ✅ 완료 | 08-mdc-logging | 필수 | Day 3 완료 |
 | 14 | Contract Testing (Pact) | 대기 | 10-contract-testing | ⭐선택 | 실무 도입 장벽 |
 | --- | --- 아래는 선택 항목 --- | --- | --- | --- | --- |
-| 15 | 대기열 + 세마포어 조합 (버퍼링) | 대기 | 04-1-queue-semaphore | ⭐선택 | 심화 |
+| 15 | 대기열 + 세마포어 조합 (버퍼링) | 대기 | 04-1-queue-semaphore | 필수 | Phase 2-B 후 진행 |
 | 16 | Bean Validation 입력 검증 | 대기 | 06-bean-validation | ⭐선택 | Spring 기본 |
 | 17 | 글로벌 예외 처리 | 대기 | 07-exception-handling | ⭐선택 | Spring 기본 |
 | 18 | TransactionTemplate 적용 | 대기 | 09-transaction-template | ⭐선택 | Spring 심화 |
