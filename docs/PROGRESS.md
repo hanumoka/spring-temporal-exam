@@ -2,9 +2,10 @@
 
 ## 현재 상태
 
-- **현재 Phase**: Phase 2-B - MQ + Redis + Observability (진행 중)
-- **마지막 업데이트**: 2026-02-05 (Day 4 완료: Outbox + DLQ + Notification)
+- **현재 Phase**: Phase 3 - Temporal 연동 (진행 중)
+- **마지막 업데이트**: 2026-02-05 (Day 6 진행: Temporal 기본 구현 완료)
 - **Spring Boot**: 3.5.9
+- **Temporal SDK**: 1.26.0
 - **목표 완료일**: 2026-02-08 (토) - 7일 확장
 
 ---
@@ -652,15 +653,69 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 
 | 시간 | 항목 | 학습 문서 | 상태 |
 |------|------|----------|------|
-| 오전 | Temporal 핵심 개념 (Workflow, Activity, Worker) | 01-temporal-concepts | ⬜ |
-| 오전 | Temporal 로컬 인프라 구성 | 01-temporal-concepts | ⬜ |
-| 오후 | Temporal + Spring Boot 연동 | 02-temporal-spring | ⬜ |
-| 오후 | Workflow/Activity 정의 | 02-temporal-spring | ⬜ |
+| 오전 | Temporal 핵심 개념 (Workflow, Activity, Worker) | 01-temporal-concepts | ✅ 완료 |
+| 오전 | Temporal 로컬 인프라 구성 | 01-temporal-concepts | ✅ 완료 |
+| 오후 | Temporal + Spring Boot 연동 | 02-temporal-spring | ✅ 완료 |
+| 오후 | Workflow/Activity 정의 | 02-temporal-spring | ✅ 완료 |
 | 저녁 | **GitHub Actions CI/CD** | devops/01-github-actions | ⬜ |
 
+**✅ Day 6 구현 완료 내역** (2026-02-05):
+
+| 구현 항목 | 파일 | 설명 |
+|----------|------|------|
+| **Docker Temporal 추가** | `docker-compose.yml` | Temporal Server, PostgreSQL, UI |
+| **Workflow 인터페이스** | `workflow/OrderWorkflow.java` | @WorkflowInterface, @WorkflowMethod |
+| **Workflow 구현** | `workflow/impl/OrderWorkflowImpl.java` | Saga 패턴 + 자동 보상 |
+| **Activity 인터페이스** | `activity/OrderActivities.java` | @ActivityInterface, @ActivityMethod |
+| **Activity 구현** | `activity/impl/OrderActivitiesImpl.java` | REST API 호출 래퍼 |
+| **Temporal 설정** | `config/TemporalConfig.java` | WorkflowClient, Worker 설정 |
+| **Controller** | `controller/OrderController.java` | 동기/비동기 Workflow 시작 |
+| **포트 통일** | 전체 설정 파일 | 21000번대로 모든 포트 통일 |
+
+**🔧 포트 설정** (충돌 방지):
+
+| 서비스 | 포트 |
+|--------|------|
+| MySQL | 21306 |
+| Redis | 21379 |
+| Temporal gRPC | 21733 |
+| Temporal PostgreSQL | 21432 |
+| Temporal UI | 21088 |
+| orchestrator-pure | 21080 |
+| orchestrator-temporal | 21081 |
+| service-order | 21082 |
+| service-inventory | 21083 |
+| service-payment | 21084 |
+| service-notification | 21085 |
+
+**학습 포인트 정리**:
+
+*Temporal 핵심 개념:*
+- **Workflow**: 비즈니스 프로세스 정의 (결정적 코드만 허용)
+- **Activity**: 실제 외부 호출 (I/O, REST API 등)
+- **Worker**: Task Queue에서 작업을 가져와 실행
+- **Task Queue**: Workflow/Activity 작업 대기열
+- **Event History**: 실행 기록 (크래시 복구의 핵심)
+
+*orchestrator-pure vs orchestrator-temporal 비교:*
+
+| 항목 | orchestrator-pure | orchestrator-temporal |
+|------|------------------|----------------------|
+| 보상 트랜잭션 | 수동 관리 (try-catch) | saga.addCompensation() 자동 |
+| 재시도 | Resilience4j | Activity RetryOptions |
+| 크래시 복구 | 불가능 | 자동 재개 (Event History) |
+| 상태 추적 | 로그만 | Temporal UI 실시간 |
+
+*Workflow 규칙 (결정적 코드):*
+- 외부 호출 금지 → Activity로 위임
+- System.currentTimeMillis() 금지 → Workflow.currentTimeMillis()
+- Random 금지 → Workflow.newRandom()
+- Thread.sleep() 금지 → Workflow.sleep()
+
 **핵심 학습 포인트**:
-- temporal-spring-boot-starter 1.32.0 자동 등록 기능
-- 마이크로서비스별 독립 파이프라인
+- temporal-spring-boot-starter 1.26.0 사용
+- 기존 서비스 수정 없이 Activity로 래핑만 추가
+- workflowId를 sagaId로 활용 (Semantic Lock, 멱등성)
 
 ---
 
@@ -681,11 +736,11 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 
 ---
 
-## 일정 요약 ★ 2026-02-05 업데이트
+## 일정 요약 ★ 2026-02-05 업데이트 (Day 6 진행 중)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    7일 학습 일정 요약 (2026-02-05 업데이트)                     │
+│                    7일 학습 일정 요약 (Day 6 진행 중)                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  Day 1 (2/2 일): Phase 2-A 핵심 ✅                                          │
@@ -706,16 +761,18 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 │  ├── DLQ (Dead Letter Queue) 구현                                           │
 │  └── Notification 서비스 + Fake SMS/Email Gateway                           │
 │                                                                             │
-│  Day 5 (2/6 목): Phase 2-B 후반                                             │
-│  ├── [선택] Observability 스택 (Tempo, Prometheus, Loki, Alertmanager)     │
+│  Day 5 (2/6 목): Phase 2-B 후반 ⏭️ 건너뜀                                   │
+│  ├── [선택] Observability 스택 → Temporal에서 해결                          │
 │  └── MDC 로깅으로 기본 추적 구현됨 (Day 3)                                  │
 │                                                                             │
-│  Day 6 (2/7 금): Phase 3 + DevOps                                           │
-│  ├── Temporal 개념 + 인프라 + Spring 연동                                   │
-│  └── GitHub Actions CI/CD                                                  │
+│  Day 6 (2/7 금): Phase 3 🔄 진행 중                                         │
+│  ├── ✅ Temporal 핵심 개념 학습                                             │
+│  ├── ✅ Docker 인프라 구성 (Temporal Server)                                │
+│  ├── ✅ orchestrator-temporal 모듈 구현                                     │
+│  └── ⬜ GitHub Actions CI/CD                                                │
 │                                                                             │
 │  Day 7 (2/8 토): Phase 3 완료 + 성능 테스트                                 │
-│  ├── Saga → Temporal 전환, 한계 실습                                        │
+│  ├── Temporal 한계 실습 (분산 락 + 멱등성 조합)                             │
 │  └── k6 성능 테스트, [선택] Virtual Threads                                 │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -1077,12 +1134,12 @@ InventoryServiceClient.java:111
 
 | # | 항목 | 상태 | 학습 문서 | 비고 |
 |---|------|------|----------|------|
-| 1 | Temporal 핵심 개념 학습 | 대기 | 01-temporal-concepts | |
-| 2 | Temporal 로컬 인프라 구성 | 대기 | 01-temporal-concepts | |
-| 3 | Temporal + Spring 연동 | 대기 | 02-temporal-spring | spring-boot-starter 1.32.0 |
-| 4 | Workflow/Activity 정의 | 대기 | 02-temporal-spring | |
-| 5 | 기존 Saga 로직 Temporal 전환 | 대기 | 02-temporal-spring | |
-| 6 | Temporal 한계와 보완 전략 | ✅ 완료 | 03-temporal-limitations | |
+| 1 | Temporal 핵심 개념 학습 | ✅ 완료 | 01-temporal-concepts | Day 6 |
+| 2 | Temporal 로컬 인프라 구성 | ✅ 완료 | 01-temporal-concepts | Docker Compose |
+| 3 | Temporal + Spring 연동 | ✅ 완료 | 02-temporal-spring | temporal-sdk 1.26.0 |
+| 4 | Workflow/Activity 정의 | ✅ 완료 | 02-temporal-spring | OrderWorkflow, OrderActivities |
+| 5 | Temporal 한계 실습 | 대기 | 03-temporal-limitations | Day 7 예정 |
+| 6 | Temporal 한계와 보완 전략 | ✅ 완료 | 03-temporal-limitations | 문서 |
 
 ---
 
@@ -1117,7 +1174,9 @@ InventoryServiceClient.java:111
 | 분산 추적 | Zipkin | Grafana Tempo | Grafana 스택 통합 |
 | 성능 테스트 | - | k6 | JavaScript 기반 |
 | CI/CD | - | GitHub Actions | Docker 통합 |
-| Temporal SDK | 1.x | 1.32.0 | spring-boot-starter GA |
+| Temporal SDK | - | 1.26.0 | temporal-spring-boot-starter |
+| Temporal Server | - | 1.25.2 | temporalio/auto-setup |
+| Temporal UI | - | 2.31.2 | 포트 21088 |
 
 ---
 
