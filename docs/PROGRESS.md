@@ -495,7 +495,7 @@ acquireSemanticLock()에서 RESERVING만 체크 → RESERVING + RESERVED 모두 
 | 순서 | 항목 | 학습 문서 | 구분 | 상태 |
 |------|------|----------|------|------|
 | 1 | Redis 기초 (자료구조, 명령어) | 01-redis-basics | 필수 | ⬜ |
-| 2 | Redis Stream (Consumer Group) | 02-redis-stream | ⭐선택 | ⬜ |
+| 2 | Redis Stream (Consumer Group) | 02-redis-stream | 필수 | ⬜ |
 | 3 | Redisson 심화 (Pending List, Phantom Key) | 03-redisson | ⭐선택 | ⬜ |
 | 4 | **Outbox 패턴 (Polling 방식)** | 04-outbox-pattern | 필수 | ⬜ |
 | 5 | Notification 서비스 구현 | - | 필수 | ⬜ |
@@ -688,7 +688,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 │  └── 12-redis-lock-pitfalls  ← 심화로 이동 (핵심만 Day 2에서)               │
 │                                                                             │
 │  Phase 2-B 선택 (6개) ★ CDC 추가                                            │
-│  ├── 02-redis-stream         ← Redis Stream (MQ 구현)                       │
+│  ├── 02-redis-stream         ← Redis Stream (MQ 구현, 필수)                 │
 │  ├── 03-redisson             ← Redisson 심화                                │
 │  ├── 04-1-cdc-debezium       ← 🆕 CDC (Polling → Debezium 전환)             │
 │  ├── 06-prometheus-grafana   ← 메트릭 시각화 (운영)                         │
@@ -820,7 +820,7 @@ Temporal의 가치를 체감하기 위해 반드시 거쳐야 하는 학습 경�
 | 5 | OpenTelemetry + **Grafana Tempo** | 대기 | 05-opentelemetry-tempo | 필수 | 분산 추적 |
 | 6 | **k6 성능 테스트** | 대기 | 09-performance-testing | 필수 | |
 | --- | --- 아래는 선택 항목 --- | --- | --- | --- | --- |
-| 7 | Redis Stream 학습 | 대기 | 02-redis-stream | ⭐선택 | MQ 심화 |
+| 7 | Redis Stream 학습 | 대기 | 02-redis-stream | 필수 | MQ 구현 |
 | 8 | Redisson 심화 | 대기 | 03-redisson | ⭐선택 | |
 | 9 | **🆕 CDC (Debezium) 전환** | 대기 | 04-1-cdc-debezium | ⭐선택 | Polling → CDC |
 | 10 | Micrometer + Prometheus 연동 | 대기 | 06-prometheus-grafana | ⭐선택 | 운영 |
