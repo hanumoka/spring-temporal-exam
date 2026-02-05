@@ -1,0 +1,267 @@
+# Docker Swarm Stack - Development
+# 용도: 로컬 개발, 단일 노드 테스트
+#
+# 사용법:
+#   docker swarm init
+#   docker stack deploy -c docker-stack.dev.yml temporal-exam
+#   docker stack services temporal-exam
+#   docker stack rm temporal-exam
+
+version: '3.8'
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Shared Infrastructure
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root1234
+      TZ: Asia/Seoul
+    ports:
+      - "21306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "21379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Temporal Infrastructure
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  temporal-postgresql:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    ports:
+      - "21432:5432"
+    volumes:
+      - temporal-postgresql-data:/var/lib/postgresql/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    ports:
+      - "21733:7233"
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    ports:
+      - "21088:8080"
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    networks:
+      - app-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Application Services
+  # Swarm 환경에서는 서비스 이름으로 통신 (내장 DNS + LB)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # service-order:
+  #   image: ${REGISTRY:-localhost:5000}/service-order:${TAG:-latest}
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: swarm
+  #     SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/orders?useSSL=false&allowPublicKeyRetrieval=true
+  #     SPRING_DATASOURCE_USERNAME: root
+  #     SPRING_DATASOURCE_PASSWORD: root1234
+  #     SPRING_DATA_REDIS_HOST: redis
+  #     SPRING_DATA_REDIS_PORT: 6379
+  #   deploy:
+  #     replicas: 2
+  #     update_config:
+  #       parallelism: 1
+  #       delay: 10s
+  #       failure_action: rollback
+  #       order: start-first
+  #     rollback_config:
+  #       parallelism: 1
+  #       delay: 10s
+  #     restart_policy:
+  #       condition: on-failure
+  #       delay: 5s
+  #       max_attempts: 3
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:21082/actuator/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+  #   networks:
+  #     - app-network
+
+  # service-inventory:
+  #   image: ${REGISTRY:-localhost:5000}/service-inventory:${TAG:-latest}
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: swarm
+  #     SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/inventory?useSSL=false&allowPublicKeyRetrieval=true
+  #     SPRING_DATASOURCE_USERNAME: root
+  #     SPRING_DATASOURCE_PASSWORD: root1234
+  #     SPRING_DATA_REDIS_HOST: redis
+  #     SPRING_DATA_REDIS_PORT: 6379
+  #   deploy:
+  #     replicas: 2
+  #     update_config:
+  #       parallelism: 1
+  #       delay: 10s
+  #       failure_action: rollback
+  #       order: start-first
+  #     restart_policy:
+  #       condition: on-failure
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:21083/actuator/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+  #   networks:
+  #     - app-network
+
+  # service-payment:
+  #   image: ${REGISTRY:-localhost:5000}/service-payment:${TAG:-latest}
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: swarm
+  #     SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/payments?useSSL=false&allowPublicKeyRetrieval=true
+  #     SPRING_DATASOURCE_USERNAME: root
+  #     SPRING_DATASOURCE_PASSWORD: root1234
+  #     SPRING_DATA_REDIS_HOST: redis
+  #     SPRING_DATA_REDIS_PORT: 6379
+  #   deploy:
+  #     replicas: 2
+  #     update_config:
+  #       parallelism: 1
+  #       delay: 10s
+  #       failure_action: rollback
+  #       order: start-first
+  #     restart_policy:
+  #       condition: on-failure
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:21084/actuator/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+  #   networks:
+  #     - app-network
+
+  # orchestrator-temporal:
+  #   image: ${REGISTRY:-localhost:5000}/orchestrator-temporal:${TAG:-latest}
+  #   ports:
+  #     - "21081:21081"
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: swarm
+  #     TEMPORAL_SERVICE_URL: temporal:7233
+  #     # Swarm 내부 DNS로 서비스 호출 (자동 로드밸런싱)
+  #     SERVICES_ORDER_URL: http://service-order:21082
+  #     SERVICES_INVENTORY_URL: http://service-inventory:21083
+  #     SERVICES_PAYMENT_URL: http://service-payment:21084
+  #   deploy:
+  #     replicas: 2
+  #     update_config:
+  #       parallelism: 1
+  #       delay: 10s
+  #       failure_action: rollback
+  #       order: start-first
+  #     restart_policy:
+  #       condition: on-failure
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:21081/actuator/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+  #   networks:
+  #     - app-network
+
+networks:
+  app-network:
+    driver: overlay
+    attachable: true
+
+volumes:
+  mysql-data:
+  redis-data:
+  temporal-postgresql-data:

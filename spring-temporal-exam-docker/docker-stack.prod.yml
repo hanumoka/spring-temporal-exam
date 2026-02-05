@@ -1,0 +1,423 @@
+# Docker Swarm Stack - Production
+# 용도: 프로덕션 환경, 3노드 이상 클러스터
+#
+# 특징:
+#   - Temporal Server 서비스 분리 (frontend, history, matching, worker)
+#   - 서비스별 독립적인 스케일링
+#   - 시크릿을 통한 민감 정보 관리
+#   - 리소스 제한 설정
+#
+# 사전 준비:
+#   1. 시크릿 생성:
+#      echo "temporal_password" | docker secret create temporal_db_password -
+#      echo "root1234" | docker secret create mysql_password -
+#
+#   2. 외부 DB 준비 (권장):
+#      - PostgreSQL (Temporal용)
+#      - MySQL (애플리케이션용)
+#      - Redis (캐시/락)
+#
+# 사용법:
+#   docker stack deploy -c docker-stack.prod.yml temporal-exam-prod
+
+version: '3.8'
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 공통 설정 (YAML Anchors)
+# ═══════════════════════════════════════════════════════════════════════════
+
+x-temporal-common: &temporal-common
+  image: temporalio/server:1.25.2
+  networks:
+    - temporal-network
+  deploy:
+    restart_policy:
+      condition: on-failure
+      delay: 10s
+      max_attempts: 3
+
+x-temporal-env: &temporal-env
+  DB: postgres12
+  DB_PORT: 5432
+  POSTGRES_USER: temporal
+  POSTGRES_PWD_FILE: /run/secrets/temporal_db_password
+  POSTGRES_SEEDS: ${TEMPORAL_DB_HOST:-temporal-postgresql}
+  DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/production.yaml
+  ENABLE_ES: "false"
+  # Ringpop 클러스터 설정
+  TEMPORAL_BROADCAST_ADDRESS: "{{ .Task.Name }}.temporal-network"
+  # 로깅
+  LOG_LEVEL: info
+
+x-app-common: &app-common
+  networks:
+    - app-network
+  deploy:
+    update_config:
+      parallelism: 1
+      delay: 10s
+      failure_action: rollback
+      order: start-first
+      monitor: 60s
+    rollback_config:
+      parallelism: 2
+      delay: 5s
+    restart_policy:
+      condition: on-failure
+      delay: 5s
+      max_attempts: 3
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Temporal Server - 서비스 분리 배포
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  temporal-frontend:
+    <<: *temporal-common
+    environment:
+      <<: *temporal-env
+      SERVICES: frontend
+      FRONTEND_MEMBERSHIP_PORT: 6933
+      FRONTEND_GRPC_PORT: 7233
+    ports:
+      - "21733:7233"
+    secrets:
+      - temporal_db_password
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        order: start-first
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "localhost:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  temporal-history:
+    <<: *temporal-common
+    environment:
+      <<: *temporal-env
+      SERVICES: history
+      HISTORY_MEMBERSHIP_PORT: 6934
+      HISTORY_GRPC_PORT: 7234
+      # History Shards 설정 (변경 불가!)
+      # 계산: History 노드 수 × 128 = 3 × 128 = 384 (반올림 512)
+      NUM_HISTORY_SHARDS: 512
+    secrets:
+      - temporal_db_password
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        order: stop-first
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+  temporal-matching:
+    <<: *temporal-common
+    environment:
+      <<: *temporal-env
+      SERVICES: matching
+      MATCHING_MEMBERSHIP_PORT: 6935
+      MATCHING_GRPC_PORT: 7235
+    secrets:
+      - temporal_db_password
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  temporal-worker:
+    <<: *temporal-common
+    environment:
+      <<: *temporal-env
+      SERVICES: worker
+      WORKER_MEMBERSHIP_PORT: 6936
+      WORKER_GRPC_PORT: 7236
+    secrets:
+      - temporal_db_password
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    ports:
+      - "21088:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal-frontend:7233
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    networks:
+      - temporal-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Application Services
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  service-order:
+    <<: *app-common
+    image: ${REGISTRY}/service-order:${TAG:-latest}
+    environment:
+      SPRING_PROFILES_ACTIVE: swarm,prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://${MYSQL_HOST:-mysql}:3306/orders?useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD_FILE: /run/secrets/mysql_password
+      SPRING_DATA_REDIS_HOST: ${REDIS_HOST:-redis}
+      SPRING_DATA_REDIS_PORT: 6379
+      # JVM 옵션
+      JAVA_OPTS: -Xms512m -Xmx1g -XX:+UseG1GC
+    secrets:
+      - mysql_password
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1536M
+        reservations:
+          cpus: '0.5'
+          memory: 768M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:21082/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  service-inventory:
+    <<: *app-common
+    image: ${REGISTRY}/service-inventory:${TAG:-latest}
+    environment:
+      SPRING_PROFILES_ACTIVE: swarm,prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://${MYSQL_HOST:-mysql}:3306/inventory?useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD_FILE: /run/secrets/mysql_password
+      SPRING_DATA_REDIS_HOST: ${REDIS_HOST:-redis}
+      SPRING_DATA_REDIS_PORT: 6379
+      JAVA_OPTS: -Xms512m -Xmx1g -XX:+UseG1GC
+    secrets:
+      - mysql_password
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1536M
+        reservations:
+          cpus: '0.5'
+          memory: 768M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:21083/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  service-payment:
+    <<: *app-common
+    image: ${REGISTRY}/service-payment:${TAG:-latest}
+    environment:
+      SPRING_PROFILES_ACTIVE: swarm,prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://${MYSQL_HOST:-mysql}:3306/payments?useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD_FILE: /run/secrets/mysql_password
+      SPRING_DATA_REDIS_HOST: ${REDIS_HOST:-redis}
+      SPRING_DATA_REDIS_PORT: 6379
+      JAVA_OPTS: -Xms512m -Xmx1g -XX:+UseG1GC
+    secrets:
+      - mysql_password
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1536M
+        reservations:
+          cpus: '0.5'
+          memory: 768M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:21084/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  orchestrator-temporal:
+    <<: *app-common
+    image: ${REGISTRY}/orchestrator-temporal:${TAG:-latest}
+    ports:
+      - "21081:21081"
+    environment:
+      SPRING_PROFILES_ACTIVE: swarm,prod
+      # Temporal 연결 (frontend 서비스)
+      TEMPORAL_SERVICE_URL: temporal-frontend:7233
+      # Swarm 내부 DNS로 서비스 호출 (자동 로드밸런싱)
+      SERVICES_ORDER_URL: http://service-order:21082
+      SERVICES_INVENTORY_URL: http://service-inventory:21083
+      SERVICES_PAYMENT_URL: http://service-payment:21084
+      JAVA_OPTS: -Xms512m -Xmx1g -XX:+UseG1GC
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1536M
+        reservations:
+          cpus: '0.5'
+          memory: 768M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:21081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    networks:
+      - app-network
+      - temporal-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Infrastructure (프로덕션에서는 외부 관리형 서비스 권장)
+  # 아래는 Self-hosted 옵션
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # Temporal용 PostgreSQL
+  temporal-postgresql:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD_FILE: /run/secrets/temporal_db_password
+    volumes:
+      - temporal-postgresql-data:/var/lib/postgresql/data
+    secrets:
+      - temporal_db_password
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.type == db
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - temporal-network
+
+  # 애플리케이션용 MySQL
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_password
+      TZ: Asia/Seoul
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=500
+      - --innodb-buffer-pool-size=1G
+    secrets:
+      - mysql_password
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.type == db
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.type == db
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1536M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+networks:
+  temporal-network:
+    driver: overlay
+    attachable: true
+  app-network:
+    driver: overlay
+    attachable: true
+
+secrets:
+  temporal_db_password:
+    external: true
+  mysql_password:
+    external: true
+
+volumes:
+  mysql-data:
+  redis-data:
+  temporal-postgresql-data:
