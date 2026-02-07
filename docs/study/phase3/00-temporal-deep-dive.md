@@ -95,10 +95,11 @@
 2020년: Temporal 1.0 출시
 
 2024년: Spring Boot Starter 공식 GA
-        └── 현재 프로젝트: 1.26.0 사용
+        └── Temporal Java SDK 1.20+ 부터 지원
 
-2025년: Temporal 1.31.0+
-        └── 최신 Spring Boot 3.x 지원
+현재: Temporal Spring Boot Starter 1.26.0
+      └── 이 프로젝트에서 사용 중인 버전
+      └── gradle/libs.versions.toml 참조
 ```
 
 ---

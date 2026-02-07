@@ -65,13 +65,13 @@
 ### 2.1 의존성 추가
 
 > ⚠️ **버전 참고**: 최신 버전은 [TECH-STACK.md](../../architecture/TECH-STACK.md) 참조
-> - Temporal SDK: 1.32.1 (2026년 1월 기준)
+> - Temporal Spring Boot Starter: 1.26.0 (현재 프로젝트 기준)
 
 ```groovy
 // build.gradle (orchestrator-temporal 모듈)
 dependencies {
-    // Temporal Java SDK
-    implementation 'io.temporal:temporal-sdk:1.32.1'
+    // Temporal Spring Boot Starter (권장)
+    implementation 'io.temporal:temporal-spring-boot-starter:1.26.0'
 
     // Spring Boot
     implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -81,7 +81,7 @@ dependencies {
     implementation project(':common')
 
     // 테스트
-    testImplementation 'io.temporal:temporal-testing:1.32.1'
+    testImplementation 'io.temporal:temporal-testing:1.26.0'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 ```
