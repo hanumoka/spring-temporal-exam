@@ -16,6 +16,7 @@
 6. [실전 Activity 구현 템플릿](#6-실전-activity-구현-템플릿)
 7. [체크리스트와 안티패턴](#7-체크리스트와-안티패턴)
 8. [Outbox 패턴과 Kafka 이벤트 발행](#8-outbox-패턴과-kafka-이벤트-발행)
+9. [Saga ID와 상태 관리의 변화](#9-saga-id와-상태-관리의-변화)
 
 ---
 
@@ -1961,6 +1962,271 @@ public class OrderEventConsumer {
 
 ---
 
+## 9. Saga ID와 상태 관리의 변화
+
+### 9.1 Phase 2-A에서 Saga ID의 역할
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Phase 2-A의 Saga ID가 담당했던 것                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. Saga 인스턴스 식별                                                      │
+│     └── "이 주문 처리가 어떤 Saga인지"                                      │
+│     └── UUID.randomUUID()로 생성                                            │
+│                                                                              │
+│  2. 상태 추적 (DB 저장)                                                     │
+│     └── "현재 어느 단계까지 진행됐는지"                                     │
+│     └── saga_states 테이블: saga_id, current_step, status                  │
+│                                                                              │
+│  3. 보상 순서 결정                                                          │
+│     └── "실패 시 어디서부터 보상해야 하는지"                                │
+│     └── 상태 조회 후 역순 보상 실행                                         │
+│                                                                              │
+│  4. 멱등성 키의 일부                                                        │
+│     └── "payment-{saga_id}-{step}" 형태로 중복 방지                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 Temporal 도입 후 변화
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Temporal이 대체하는 것                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. Saga 인스턴스 식별                                                      │
+│     └── ✅ Workflow ID가 대체                                               │
+│     └── WorkflowOptions.setWorkflowId("order-" + orderId)                  │
+│     └── 별도 saga-id 생성 불필요!                                           │
+│                                                                              │
+│  2. 상태 추적                                                               │
+│     └── ✅ Event History가 자동 관리                                        │
+│     └── saga_states 테이블 불필요!                                          │
+│     └── 어느 Activity까지 완료됐는지 Temporal이 기억                        │
+│                                                                              │
+│  3. 보상 순서 결정                                                          │
+│     └── ✅ Saga.addCompensation()이 자동 관리                               │
+│     └── Event History에 보상 순서 기록됨                                    │
+│     └── saga.compensate() 호출만 하면 역순 실행                             │
+│                                                                              │
+│  4. 멱등성 키                                                               │
+│     └── ⚠️ 여전히 필요! 하지만...                                          │
+│     └── Workflow ID + Activity ID로 생성 가능                               │
+│     └── 별도 saga-id 생성/관리 불필요                                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 코드 비교: Before vs After
+
+```java
+// ═══════════════════════════════════════════════════════════════════════════
+// [Phase 2-A] Saga ID 직접 관리
+// ═══════════════════════════════════════════════════════════════════════════
+
+public OrderResult processOrder(OrderRequest request) {
+    // 1. Saga ID 생성 (직접 관리)
+    String sagaId = UUID.randomUUID().toString();
+
+    // 2. Saga 상태 저장 (DB)
+    sagaStateRepository.save(new SagaState(sagaId, "STARTED"));
+
+    try {
+        // 3. 각 단계마다 상태 업데이트
+        orderService.create(request, sagaId);
+        sagaStateRepository.updateStep(sagaId, "ORDER_CREATED");
+
+        inventoryService.reserve(request, sagaId);
+        sagaStateRepository.updateStep(sagaId, "STOCK_RESERVED");
+
+        paymentService.process(request, sagaId);
+        sagaStateRepository.updateStep(sagaId, "PAYMENT_COMPLETED");
+
+        sagaStateRepository.updateStatus(sagaId, "COMPLETED");
+        return OrderResult.success();
+
+    } catch (Exception e) {
+        // 4. 보상 시 상태 조회해서 어디까지 진행됐는지 확인
+        SagaState state = sagaStateRepository.findById(sagaId);
+        compensate(state);  // 진행된 단계만 보상
+        sagaStateRepository.updateStatus(sagaId, "COMPENSATED");
+        return OrderResult.failure(e.getMessage());
+    }
+}
+
+// 필요한 인프라:
+// - saga_states 테이블
+// - SagaStateRepository
+// - UUID 생성 로직
+// - 단계별 상태 업데이트 로직
+// - 보상 순서 결정 로직
+```
+
+```java
+// ═══════════════════════════════════════════════════════════════════════════
+// [Temporal] Saga ID 불필요
+// ═══════════════════════════════════════════════════════════════════════════
+
+public OrderResult processOrder(OrderRequest request) {
+    // ★ Saga ID 생성 불필요! Workflow ID가 대신함
+    // ★ 상태 저장 불필요! Event History가 자동 관리
+
+    Saga saga = new Saga(new Saga.Options.Builder().build());
+
+    try {
+        // 상태 업데이트 코드 없음!
+        String orderId = activities.createOrder(request);
+        saga.addCompensation(() -> activities.cancelOrder(orderId));
+
+        String reservationId = activities.reserveStock(request);
+        saga.addCompensation(() -> activities.cancelReservation(reservationId));
+
+        String paymentId = activities.processPayment(request);
+        saga.addCompensation(() -> activities.refundPayment(paymentId));
+
+        activities.confirmAll(orderId, reservationId);
+
+        return OrderResult.success(orderId);
+
+    } catch (Exception e) {
+        // ★ 어디까지 진행됐는지 조회 불필요!
+        // ★ Temporal이 알아서 역순 보상
+        saga.compensate();
+        return OrderResult.failure(e.getMessage());
+    }
+}
+
+// 불필요해진 인프라:
+// - saga_states 테이블 ❌
+// - SagaStateRepository ❌
+// - UUID 생성 로직 ❌
+// - 단계별 상태 업데이트 로직 ❌
+// - 보상 순서 결정 로직 ❌
+```
+
+### 9.4 멱등성 키 생성 방식 변화
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    멱등성 키: Saga ID → Temporal ID                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  [Phase 2-A] Saga ID 기반                                                   │
+│  ══════════════════════════                                                 │
+│                                                                              │
+│  String sagaId = UUID.randomUUID().toString();                              │
+│  String idempotencyKey = sagaId + "-payment-" + orderId;                    │
+│  // 예: "550e8400-e29b-41d4-a716-446655440000-payment-O123"                 │
+│                                                                              │
+│  문제점:                                                                    │
+│  • sagaId를 직접 생성해야 함                                                │
+│  • sagaId를 각 서비스에 전달해야 함                                         │
+│  • sagaId 분실 시 추적 어려움                                               │
+│                                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  [Temporal] Workflow ID + Activity ID 기반                                  │
+│  ══════════════════════════════════════════                                 │
+│                                                                              │
+│  @Override                                                                  │
+│  public PaymentResult processPayment(String orderId, BigDecimal amount) {  │
+│      ActivityInfo info = Activity.getExecutionContext().getInfo();         │
+│                                                                              │
+│      // Temporal이 제공하는 ID 사용 (자동 관리!)                            │
+│      String idempotencyKey = String.format("payment-%s-%s",                │
+│          info.getWorkflowId(),   // 예: "order-O123"                       │
+│          info.getActivityId()    // 예: "3" (Workflow 내 Activity 순서)    │
+│      );                                                                     │
+│      // 결과: "payment-order-O123-3"                                        │
+│                                                                              │
+│      return idempotencyService.executeIdempotent(idempotencyKey, () -> {   │
+│          return paymentClient.charge(orderId, amount);                     │
+│      });                                                                    │
+│  }                                                                           │
+│                                                                              │
+│  장점:                                                                      │
+│  ✅ Temporal이 ID를 자동 관리                                               │
+│  ✅ Workflow 재시작해도 같은 Workflow ID 유지                               │
+│  ✅ Activity 재시도해도 같은 Activity ID 유지                               │
+│  ✅ 별도 전달 없이 Activity 내에서 바로 조회 가능                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.5 삭제 가능한 코드/인프라
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Temporal 도입 시 삭제 가능한 것들                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  데이터베이스:                                                              │
+│  ─────────────                                                              │
+│  ❌ saga_states 테이블                                                      │
+│  ❌ saga_steps 테이블 (있다면)                                              │
+│  ❌ saga_compensations 테이블 (있다면)                                      │
+│                                                                              │
+│  코드:                                                                       │
+│  ─────                                                                      │
+│  ❌ SagaState 엔티티                                                        │
+│  ❌ SagaStateRepository                                                     │
+│  ❌ SagaStateService                                                        │
+│  ❌ UUID.randomUUID() saga-id 생성 로직                                     │
+│  ❌ 단계별 상태 업데이트 로직                                               │
+│  ❌ 보상 순서 결정 로직 (어디까지 진행됐는지 조회)                           │
+│  ❌ Saga 복구 로직 (서버 재시작 시)                                         │
+│                                                                              │
+│  유지해야 하는 것:                                                          │
+│  ─────────────────                                                          │
+│  ✅ 멱등성 서비스 (IdempotencyService)                                      │
+│  ✅ 멱등성 키 생성 (방식만 Temporal ID 사용으로 변경)                       │
+│  ✅ 분산 락 (동시성 제어)                                                   │
+│  ✅ 비즈니스 로직 검증                                                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.6 정리
+
+| 항목 | Phase 2-A | Temporal | 필요 여부 |
+|------|-----------|----------|----------|
+| **Saga ID 생성** | UUID.randomUUID() | Workflow ID로 대체 | ❌ 불필요 |
+| **상태 저장 (DB)** | saga_states 테이블 | Event History 자동 | ❌ 불필요 |
+| **진행 단계 추적** | 직접 UPDATE | Event History 자동 | ❌ 불필요 |
+| **보상 순서 결정** | 상태 조회 후 결정 | Saga 클래스 자동 | ❌ 불필요 |
+| **크래시 복구** | 직접 구현 | Temporal 자동 | ❌ 불필요 |
+| **멱등성 키** | saga-id 기반 | Workflow ID + Activity ID | ✅ **방식만 변경** |
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              핵심 결론                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Q: Saga ID가 필요 없어지는가?                                              │
+│                                                                              │
+│  A: ✅ Saga ID 자체는 불필요 (Workflow ID가 대체)                           │
+│     ✅ Saga 상태 관리도 불필요 (Event History가 대체)                       │
+│     ✅ 보상 순서 관리도 불필요 (Saga 클래스가 대체)                         │
+│     ⚠️ 멱등성 키는 여전히 필요 (Temporal ID로 생성 가능)                    │
+│                                                                              │
+│  Temporal이 기억하는 것:                                                    │
+│  • 어떤 Workflow인지 (Workflow ID)                                          │
+│  • 어느 Activity까지 실행했는지 (Event History)                             │
+│  • 각 Activity의 결과가 무엇인지 (Event History)                            │
+│  • 실패 시 어떤 보상을 실행해야 하는지 (Saga 클래스)                        │
+│                                                                              │
+│  개발자가 할 일:                                                            │
+│  • Workflow ID를 비즈니스 키로 설정 (예: "order-" + orderId)                │
+│  • Activity 내에서 멱등성 보장                                              │
+│  • 동시성 제어 (분산 락)                                                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## 정리
 
 ### 핵심 메시지
@@ -1987,6 +2253,10 @@ public class OrderEventConsumer {
 │                                                                              │
 │  6. Outbox 패턴은 Temporal 재시도로 대체 가능하다.                           │
 │     → 단, Consumer 측 멱등성은 필수.                                        │
+│                                                                              │
+│  7. Saga ID와 상태 관리는 Temporal이 대체한다.                               │
+│     → Workflow ID가 Saga ID를, Event History가 상태 테이블을 대체.          │
+│     → saga_states 테이블, SagaStateRepository 등 삭제 가능.                 │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
