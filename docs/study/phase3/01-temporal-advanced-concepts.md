@@ -2,6 +2,7 @@
 
 > **전제**: `00-temporal-deep-dive.md` 학습 완료
 > **작성일**: 2026-02-05
+> **관련 문서**: [05-temporal-faq.md](./05-temporal-faq.md) - Signal/Query 실전 패턴, 재시도 실패 처리 등
 
 ---
 

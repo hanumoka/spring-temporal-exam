@@ -862,6 +862,12 @@ public String reserveStock(String productId, int quantity) {
 
 ## 다음 단계
 
+**상세 구현 가이드**: [06-temporal-activity-design-guide.md](./06-temporal-activity-design-guide.md)
+- 멱등성 설계 완벽 가이드 (Idempotency Key 생성 전략, DB 스키마)
+- 동시성 제어 완벽 가이드 (분산 락, DB Atomic UPDATE, 낙관적 락)
+- Saga 격리 문제와 Semantic Lock 패턴
+- 실전 Activity 구현 템플릿
+
 학습한 내용을 바탕으로 Phase 3 실습에서 Temporal Workflow를 직접 구현합니다.
 - Activity에 분산 락, 멱등성 적용
 - Saga 보상 패턴 구현

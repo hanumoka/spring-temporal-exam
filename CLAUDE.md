@@ -76,7 +76,7 @@ orchestrator-temporal/  # Temporal 구현
 | `docs/architecture/TECH-STACK.md` | 기술 스택 검증 |
 | `docs/study/phase2a/` | Phase 2-A 학습 문서 (14개) |
 | `docs/study/phase2b/` | Phase 2-B 학습 문서 (9개) |
-| `docs/study/phase3/` | Phase 3 학습 문서 (3개) |
+| `docs/study/phase3/` | Phase 3 학습 문서 (9개) |
 | `docs/study/devops/` | DevOps 학습 문서 (1개) |
 | `docs/sessions/` | 세션별 기록 |
 | `docs/TROUBLESHOOTING.md` | 트러블슈팅 |
@@ -90,3 +90,4 @@ orchestrator-temporal/  # Temporal 구현
 | `05-opentelemetry-tempo.md` | Grafana Tempo 분산 추적 |
 | `09-performance-testing.md` | k6 부하 테스트 |
 | `devops/01-github-actions.md` | CI/CD 파이프라인 |
+| `phase3/05-temporal-faq.md` | Temporal FAQ (관리 주체, 코드 저장 위치, 재시도 실패, Signal/Query) |
