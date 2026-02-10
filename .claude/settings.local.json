@@ -10,5 +10,6 @@
       "Bash(git commit:*)",
       "Bash(git push:*)"
     ]
-  }
+  },
+  "outputStyle": "Learning"
 }

@@ -3,7 +3,7 @@
 ## 현재 상태
 
 - **현재 Phase**: Phase 3 - Temporal 연동 (진행 중)
-- **마지막 업데이트**: 2026-02-05 (Day 6 진행: Temporal 기본 구현 완료)
+- **마지막 업데이트**: 2026-02-10 (Phase 3 학습 가이드 진행 중)
 - **Spring Boot**: 3.5.9
 - **Temporal SDK**: 1.26.0
 - **목표 완료일**: 2026-02-08 (토) - 7일 확장
@@ -1128,9 +1128,33 @@ InventoryServiceClient.java:111
 
 ---
 
-## Phase 3: Temporal 연동
+## Phase 3: Temporal 학습 가이드
 
-### 진행 현황
+> **학습 방식**: Claude 가이드 세션 (5단계 형식)
+> **커리큘럼**: `docs/study/phase3/README.md` (15개 문서, 5 Level)
+> **문서 리팩토링**: 완료 (기존 10개 14,493줄 → 15개 8,200줄, 원본 `_archive/`)
+
+### 학습 가이드 진행 현황
+
+| # | 문서 | 세션 | 상태 | 비고 |
+|---|------|------|------|------|
+| 01 | 왜 Temporal이 필요한가? | Session 1 | ⏳ 진행중 | 핵심 포인트 전달 완료, 이해도 확인 대기 |
+| 02 | 핵심 개념 5가지 | Session 2 | 대기 | Workflow, Activity, Worker, Task Queue |
+| 02-A | 로컬 환경 구축과 Web UI 실습 | Session 3 | 대기 | Docker Compose + 실습 |
+| 03 | Durable Execution과 Event History | Session 4 | 대기 | |
+| 04 | Worker와 Event Flow | Session 5 | 대기 | |
+| 05 | 재시도 정책과 타임아웃 | Session 6 | 대기 | |
+| 06 | Signal, Query, Update | Session 7 | 대기 | |
+| 07 | 심화 기능 | Session 8 | 대기 | Timer, Child WF, Continue-As-New |
+| 08 | Spring Boot 연동 | Session 9 | 대기 | |
+| 09 | Saga와 Temporal | Session 10 | 대기 | Phase 2-A → Temporal 전환 |
+| 10 | MSA 아키텍처 흐름도 | Session 11 | 대기 | |
+| 11 | Activity 설계 가이드 | Session 12 | 대기 | 멱등성, 동시성, 격리 |
+| 12 | 한계와 Phase 2 기술 조합 | Session 13 | 대기 | |
+| 13 | 프로덕션 가이드 | Session 14 | 대기 | Versioning, 배포, 모니터링 |
+| 14 | FAQ와 트러블슈팅 | Session 15 | 대기 | |
+
+### 이전 Phase 3 구현 현황 (코드)
 
 | # | 항목 | 상태 | 학습 문서 | 비고 |
 |---|------|------|----------|------|
@@ -1138,7 +1162,7 @@ InventoryServiceClient.java:111
 | 2 | Temporal 로컬 인프라 구성 | ✅ 완료 | 01-temporal-concepts | Docker Compose |
 | 3 | Temporal + Spring 연동 | ✅ 완료 | 02-temporal-spring | temporal-sdk 1.26.0 |
 | 4 | Workflow/Activity 정의 | ✅ 완료 | 02-temporal-spring | OrderWorkflow, OrderActivities |
-| 5 | Temporal 한계 실습 | 대기 | 03-temporal-limitations | Day 7 예정 |
+| 5 | Temporal 한계 실습 | 대기 | 03-temporal-limitations | 학습 가이드 완료 후 |
 | 6 | Temporal 한계와 보완 전략 | ✅ 완료 | 03-temporal-limitations | 문서 |
 
 ---
