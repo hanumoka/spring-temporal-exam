@@ -49,6 +49,8 @@ Temporal Workflow는 Event Sourcing 기반이다. 코드가 변경되면 기존 
 
 처음 시작한다면 **Workflow.getVersion** 먼저 익히는 것을 권장한다.
 
+> **[프로젝트 참고]**: Versioning은 학습 목적으로 문서화했으며, 현재 프로젝트 코드에는 아직 적용되지 않았습니다. Production Readiness 단계에서 구현 예정입니다.
+
 ### 1.3 getVersion 사용법
 
 ```java
@@ -394,8 +396,10 @@ public class TemporalWorkerLifecycle implements DisposableBean {
 |------|------|
 | 실패 원인 분석 | Temporal UI에서 Event History 클릭, 에러 메시지 확인 |
 | 실행 중 상태 확인 | Query 메서드로 현재 단계 조회 |
-| Replay 문제 | Workflow 로그는 Replay 시에도 실행됨 (주의) |
+| Replay 문제 | Workflow 로그는 Replay 시에도 실행됨 -> `Workflow.isReplaying()` 가드 권장 |
 | 타이머 테스트 | TestWorkflowEnvironment에서 시간 빠르게 진행 |
+
+> **[프로젝트 참고]**: `Workflow.isReplaying()` 가드는 실제 OrderWorkflowImpl 코드에도 적용할 예정입니다. 상세 예시는 `14-faq-troubleshooting.md` 5.6절 참조.
 
 ---
 
@@ -454,6 +458,8 @@ public OrderResult processOrder(OrderRequest request) {
 }
 ```
 
+> **[프로젝트 참고]**: `Workflow.getVersion()`은 위 1절에서 설명한 것과 동일한 메커니즘입니다. 현재 프로젝트 코드에는 미적용 상태이며, Production Readiness 단계에서 적용 예정입니다.
+
 ### 7.4 안전하지 않은 수정 vs 안전한 수정
 
 | 수정 유형 | Versioning 필요? | 이유 |
@@ -478,5 +484,5 @@ public OrderResult processOrder(OrderRequest request) {
 
 ---
 
-*이전 문서: `12-temporal-retry-timeout-guide.md`*
+*이전 문서: `12-limitations-combo.md`*
 *다음 학습: `14-faq-troubleshooting.md`*

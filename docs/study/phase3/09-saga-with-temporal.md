@@ -2,7 +2,7 @@
 
 > **목적**: Phase 2-A에서 학습한 Saga 패턴이 Temporal 도입 후 어떻게 변화하는지 이해
 > **대상**: Phase 2-A의 REST Saga 구현 경험이 있는 개발자
-> **전제**: `00-temporal-deep-dive.md`, `06-temporal-activity-design-guide.md` 학습 완료
+> **전제**: `00-temporal-deep-dive.md`, `11-activity-design.md` 학습 완료
 
 ---
 
@@ -37,6 +37,12 @@ Saga는 각 서비스의 로컬 트랜잭션을 순서대로 실행하고,
         C1: 주문 취소 <-------+
                           모두 취소됨!
 ```
+
+> **참고**: 위는 Saga 패턴의 핵심 개념을 설명하기 위한 간략화된 예시이다.
+> 이 프로젝트의 실제 구현은 6단계(T1~T6)로 구성된다:
+> T1: createOrder, T2: reserveStock, T3-1: createPayment, T3-2: approvePayment,
+> T4: confirmOrder, T5: confirmReservation, T6: confirmPayment
+> 자세한 흐름은 [4.1 전체 흐름](#41-전체-흐름) 참조.
 
 ### 1.2 Phase 2-A에서 겪은 어려움
 
@@ -85,6 +91,9 @@ Saga saga = new Saga(new Saga.Options.Builder()
 > **권장**: `parallelCompensation=false`, `continueWithError=true`
 > - 순차 보상: 보상 간 의존성이 있을 수 있으므로 역순 실행이 안전
 > - 에러 무시: 하나의 보상이 실패해도 나머지는 실행해야 데이터 정합성 유지
+>
+> **현재 프로젝트 상태**: `continueWithError`를 설정하지 않아 기본값(false)이 적용 중.
+> 프로덕션에서는 `true`로 변경해야 모든 보상이 실행되도록 보장할 수 있다.
 
 ### 2.4 try-catch 패턴
 
@@ -214,16 +223,18 @@ public interface OrderWorkflow {
 @ActivityInterface
 public interface OrderActivities {
     // 정방향
-    Long createOrder(OrderRequest request);
-    String reserveStock(Long productId, int quantity);
-    Long createPayment(Long orderId, BigDecimal amount);
+    Long createOrder(Long customerId);
+    void reserveStock(Long productId, int quantity, String sagaId);
+    Long createPayment(Long orderId, BigDecimal amount, String paymentMethod, String sagaId);
+    void approvePayment(Long paymentId, String sagaId);
     // 확정
-    void confirmReservation(String reservationId);
     void confirmOrder(Long orderId);
+    void confirmReservation(Long productId, int quantity, String sagaId);
+    void confirmPayment(Long paymentId, String sagaId);
     // 보상
     void cancelOrder(Long orderId);
-    void cancelReservation(String reservationId);
-    void refundPayment(Long paymentId);
+    void cancelReservation(Long productId, int quantity, String sagaId);
+    void refundPayment(Long paymentId, String sagaId);
 }
 ```
 

@@ -6,6 +6,7 @@ import com.hanumoka.orchestrator.temporal.dto.OrderResult;
 import com.hanumoka.orchestrator.temporal.workflow.OrderWorkflow;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import com.hanumoka.common.exception.BusinessException;
 import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.Saga;
 import io.temporal.workflow.Workflow;
@@ -51,6 +52,8 @@ public class OrderWorkflowImpl implements OrderWorkflow {
                     .setBackoffCoefficient(2.0)                     // 지수 백오프
                     .setMaximumInterval(Duration.ofSeconds(30))     // 최대 대기 시간
                     .setMaximumAttempts(3)                          // 최대 재시도 횟수
+                    // 비즈니스 예외는 재시도 불필요 (재고 부족, 잘못된 입력 등)
+                    .setDoNotRetry(BusinessException.class.getName())
                     .build())
             .build();
 
@@ -63,14 +66,18 @@ public class OrderWorkflowImpl implements OrderWorkflow {
         // Workflow ID는 Temporal이 자동 생성 (클라이언트에서 지정도 가능)
         String workflowId = Workflow.getInfo().getWorkflowId();
 
-        log.info("========== Workflow 시작 [workflowId={}] ==========", workflowId);
-        log.info("요청: customerId={}, productId={}, quantity={}, amount={}",
-                request.customerId(), request.productId(),
-                request.quantity(), request.amount());
+        // Replay 시 중복 로깅 방지 (Workflow.isReplaying() 가드)
+        if (!Workflow.isReplaying()) {
+            log.info("========== Workflow 시작 [workflowId={}] ==========", workflowId);
+            log.info("요청: customerId={}, productId={}, quantity={}, amount={}",
+                    request.customerId(), request.productId(),
+                    request.quantity(), request.amount());
+        }
 
-        // Saga 옵션: 병렬 보상 여부 설정 가능
+        // Saga 옵션: 보상 실행 전략 설정
         Saga.Options sagaOptions = new Saga.Options.Builder()
-                .setParallelCompensation(false)  // 보상을 순차 실행 (역순)
+                .setParallelCompensation(false)   // 보상을 순차 실행 (역순)
+                .setContinueWithError(true)       // 보상 중 오류 발생해도 나머지 보상 계속 실행
                 .build();
 
         Saga saga = new Saga(sagaOptions);
@@ -137,7 +144,9 @@ public class OrderWorkflowImpl implements OrderWorkflow {
             activities.confirmPayment(paymentId, workflowId);
             log.info("[T6] 결제 확정 완료");
 
-            log.info("========== Workflow 성공 [workflowId={}] ==========", workflowId);
+            if (!Workflow.isReplaying()) {
+                log.info("========== Workflow 성공 [workflowId={}] ==========", workflowId);
+            }
             return OrderResult.success(orderId, paymentId, workflowId);
 
         } catch (ActivityFailure e) {

@@ -24,7 +24,8 @@
 |  4. 테스트 용이성                                                   |
 |     @SpringBootTest + TestWorkflowEnvironment + Mockito 활용       |
 |                                                                    |
-|  효과: Phase 2-A 약 150줄 --> Temporal 약 50줄                     |
+|  효과: Workflow 클래스 자체는 ~100줄로 간결 (orchestrator-pure 167줄)|
+|  단, 전체 구현은 Activities(232줄) + Config(108줄) 포함             |
 |  제거: SagaState, SagaRepository, Resilience4j 설정, 수동 보상     |
 +------------------------------------------------------------------+
 ```
@@ -137,7 +138,8 @@ dependencies {
 
 ```bash
 # 방법 1: Temporal CLI (개발 환경 권장, SQLite 내장)
-docker run --rm -p 7233:7233 -p 8233:8233 \
+# 기본 포트는 7233이지만, 이 프로젝트에서는 21733으로 매핑
+docker run --rm -p 21733:7233 -p 8233:8233 \
   temporalio/temporal:latest \
   server start-dev --ip 0.0.0.0
 ```
@@ -149,7 +151,7 @@ services:
   temporal:
     image: temporalio/server:latest
     ports:
-      - "7233:7233"
+      - "21733:7233"
     environment:
       - DB=mysql
       - DB_PORT=3306
@@ -162,9 +164,9 @@ services:
   temporal-ui:
     image: temporalio/ui:latest
     ports:
-      - "8088:8080"
+      - "21088:8080"
     environment:
-      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_ADDRESS=temporal:7233  # 내부 네트워크에서는 기본 포트 사용
     depends_on:
       - temporal
 ```
@@ -180,12 +182,12 @@ spring:
   application:
     name: orchestrator-temporal
 server:
-  port: 8090
+  port: 21081
 
 temporal:
-  service-address: localhost:7233
+  service-address: localhost:21733   # 이 프로젝트에서는 7233 → 21733으로 매핑
   namespace: default
-  task-queue: order-processing-queue
+  task-queue: order-task-queue
 
 services:
   order-url: http://localhost:8081
@@ -206,7 +208,7 @@ management:
 spring:
   temporal:
     connection:
-      target: localhost:7233
+      target: localhost:21733   # 이 프로젝트 매핑 포트
     namespace: default
     workers:
       - name: order-worker
@@ -226,20 +228,19 @@ spring:
 @Configuration
 public class TemporalConfig {
 
-    @Value("${temporal.service-address}")
-    private String temporalServiceAddress;
+    @Value("${temporal.connection.target:localhost:21733}")
+    private String temporalTarget;
 
     @Value("${temporal.namespace}")
     private String namespace;
 
-    @Value("${temporal.task-queue}")
-    private String taskQueue;
+    private static final String TASK_QUEUE = "order-task-queue";
 
     @Bean
     public WorkflowServiceStubs workflowServiceStubs() {
         return WorkflowServiceStubs.newServiceStubs(
             WorkflowServiceStubsOptions.newBuilder()
-                .setTarget(temporalServiceAddress)
+                .setTarget(temporalTarget)
                 .build()
         );
     }
@@ -265,7 +266,7 @@ public class TemporalConfig {
             .setMaxConcurrentWorkflowTaskExecutionSize(100)
             .build();
 
-        Worker worker = factory.newWorker(taskQueue, options);
+        Worker worker = factory.newWorker(TASK_QUEUE, options);
         worker.registerWorkflowImplementationTypes(OrderWorkflowImpl.class);
         worker.registerActivitiesImplementations(activities);
         factory.start();
@@ -350,9 +351,10 @@ public class OrderWorkflowImpl implements OrderWorkflow {
     public OrderWorkflowImpl() {
         this.activities = Workflow.newActivityStub(OrderActivities.class,
             ActivityOptions.newBuilder()
-                .setStartToCloseTimeout(Duration.ofMinutes(5))
+                // 30초: HTTP 호출 기준 충분한 시간이면서, 장애 감지를 빠르게 하기 위해 짧게 설정
+                .setStartToCloseTimeout(Duration.ofSeconds(30))
                 .setRetryOptions(RetryOptions.newBuilder()
-                    .setMaximumAttempts(5)
+                    .setMaximumAttempts(3)
                     .setInitialInterval(Duration.ofSeconds(1))
                     .setBackoffCoefficient(2.0)
                     .build())
@@ -431,6 +433,11 @@ spring:
 | 추가 시 | 설정 코드 수정 필요 | 어노테이션만 추가 |
 | 가시성 | 무엇이 등록되는지 명확 | 패키지 스캔에 의존 |
 | 권장 | 학습 / 소규모 | 프로덕션 / 대규모 |
+
+> **이 프로젝트의 선택**: 수동 등록 방식 (`TemporalConfig.java`)을 사용한다.
+> - 학습 프로젝트이므로 Temporal의 내부 동작을 명시적으로 이해하기 위함
+> - `worker.registerWorkflowImplementationTypes()`, `worker.registerActivitiesImplementations()`를 직접 호출
+> - Auto-Discovery의 `@WorkflowImpl` 어노테이션은 사용하지 않음
 
 ---
 
@@ -546,7 +553,7 @@ class OrderWorkflowIntegrationTest {
 |                                                                         |
 |  Temporal Cluster (Docker)                                              |
 |  +-------------------------------------------------------------------+ |
-|  |  Frontend(:7233)  ---+--- History Service ---+--- Matching Service | |
+|  |  Frontend(:21733) ---+--- History Service ---+--- Matching Service | |
 |  |  (gRPC Gateway)      |                       |                     | |
 |  |                       +--- PostgreSQL/MySQL --+                     | |
 |  |                            (Event History)                         | |
@@ -561,7 +568,7 @@ class OrderWorkflowIntegrationTest {
 |  |    Activity --HTTP--> Order/Inventory/Payment Service              | |
 |  +-------------------------------------------------------------------+ |
 |                                                                         |
-|  Temporal UI (:8088) -- http://localhost:8088                           |
+|  Temporal UI (:21088) -- http://localhost:21088                         |
 +-----------------------------------------------------------------------+
 ```
 
@@ -578,13 +585,13 @@ class OrderWorkflowIntegrationTest {
 
 | 구성 요소 | 포트 | 용도 |
 |----------|------|------|
-| Temporal Server gRPC | 7233 | SDK가 연결하는 포트 |
-| Temporal UI | 8088 | 브라우저 모니터링 |
-| orchestrator-temporal | 8090 | Temporal Workflow API |
-| service-order | 8081 | 주문 서비스 |
-| service-inventory | 8082 | 재고 서비스 |
-| service-payment | 8083 | 결제 서비스 |
-| service-notification | 8084 | 알림 서비스 |
+| Temporal Server gRPC | 21733 | SDK가 연결하는 포트 (기본 7233 → 21733 매핑) |
+| Temporal UI | 21088 | 브라우저 모니터링 (기본 8088 → 21088 매핑) |
+| orchestrator-temporal | 21081 | Temporal Workflow API |
+| service-order | 21082 | 주문 서비스 |
+| service-inventory | 21083 | 재고 서비스 |
+| service-payment | 21084 | 결제 서비스 |
+| service-notification | 21085 | 알림 서비스 |
 
 ### 트러블슈팅 Quick Reference
 
@@ -608,5 +615,5 @@ class OrderWorkflowIntegrationTest {
 
 ---
 
-*이전 학습: [06-temporal-activity-design-guide.md](./06-temporal-activity-design-guide.md)*
+*이전 학습: [11-activity-design.md](./11-activity-design.md)*
 *다음 학습: [09-saga-with-temporal.md](./09-saga-with-temporal.md)*

@@ -81,7 +81,7 @@ orchestrator-temporal/  # Temporal 구현
 - MySQL + JPA + Flyway (DB 마이그레이션)
 - Redis + Redisson 3.52.0 (캐싱, 분산 락)
 - Redis Stream (MQ)
-- Temporal 1.32.0 + Spring Boot Starter (Phase 3)
+- Temporal 1.26.0 + Spring Boot Starter (Phase 3)
 - Resilience4j (재시도, 서킷 브레이커)
 - Bean Validation (입력 검증)
 - **Grafana Tempo** + Prometheus + Grafana + Loki + Alertmanager (Observability)

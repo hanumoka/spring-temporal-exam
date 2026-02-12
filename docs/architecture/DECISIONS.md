@@ -14,10 +14,10 @@
 | D008 | Kubernetes | 미사용 (Docker Compose로 대체) |
 | D009 | Service Mesh | 미사용 (학습 범위 외) |
 | D010 | 동시성 제어 | 서비스별 차별화 적용 |
-| D011 | ORM 전략 | JPA + MyBatis 전체 서비스 병행 적용 |
-| D012 | 트랜잭션 관리 | TransactionTemplate (프로그래밍 방식) |
+| D011 | ORM 전략 | JPA 단독 적용 (MyBatis 학습은 추후 고도화) |
+| D012 | 트랜잭션 관리 | @Transactional (선언적 방식) |
 | D013 | Redis 운영 전략 | Pending List 복구 + Phantom Key 대응 |
-| D014 | Spring Boot 버전 전략 | 3.4.0 (Core 라이브러리 동일), 추후 고도화 시 4.x 전환 |
+| D014 | Spring Boot 버전 전략 | 3.5.9 (Virtual Threads, D025), 추후 고도화 시 4.x 전환 |
 | D015 | 외부 서비스 시뮬레이션 | Fake 구현체 (인터페이스 기반) |
 | D016 | Core 라이브러리 전략 | 자체 개발 + JAR 배포 (최후 목표, Phase 3 완료 후) |
 | D017 | 대기열 + 세마포어 조합 | Redis Queue + RSemaphore (트래픽 폭주 대응) |
@@ -74,9 +74,10 @@ Orchestrator
 MySQL
 ├── order_db
 ├── inventory_db
-├── payment_db
-└── notification_db
+└── payment_db
 ```
+
+> **참고**: Notification Service는 자체 DB 없이 Redis Stream(MQ)으로 이벤트를 구독합니다. (D003 참조)
 
 ---
 
@@ -325,90 +326,43 @@ semaphore.trySetPermits(5);  // 최대 5개 동시 발송
 
 ## D011. ORM 전략
 
-**결정**: JPA + MyBatis 전체 서비스 병행 적용
+**결정**: JPA 단독 적용 (MyBatis 학습은 추후 고도화 시 검토)
 
-### 적용 범위
+> **결정 변경 이력**: 초기에는 JPA + MyBatis 병행을 계획했으나,
+> Phase 2-A 구현 과정에서 JPA만으로 충분히 동시성 제어 학습이 가능하다고 판단하여 JPA 단독으로 변경.
+> MyBatis를 통한 SQL 레벨 학습은 고도화 단계에서 검토.
 
-모든 비즈니스 서비스(Order, Inventory, Payment)에 JPA와 MyBatis를 동시에 적용합니다.
+### 현재 적용 현황
 
-| 서비스 | JPA | MyBatis | 학습 포인트 |
-|--------|-----|---------|------------|
-| Order Service | 엔티티 관리 | Saga 상태 추적, 낙관적 락 | WHERE version = ? |
-| Inventory Service | 기본 CRUD | 재고 차감, 분산 락과 연계 | FOR UPDATE 직접 작성 |
-| Payment Service | 결제 정보 관리 | 멱등성 체크, 트랜잭션 로그 | INSERT IGNORE |
+| 서비스 | ORM | 주요 패턴 |
+|--------|-----|----------|
+| Order Service | JPA | @Version (낙관적 락), JpaRepository |
+| Inventory Service | JPA | @Version + Redisson RLock (분산 락) |
+| Payment Service | JPA | JpaRepository, 세마포어 |
+| Notification Service | - | DB 미사용 (Redis Stream 구독) |
 
-### 배경
+### 배경 (초기 계획)
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    쿼리 기반 동시성 제어 학습                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  [문제점]                                                            │
-│  JPA @Version, @Lock 등은 내부 동작이 추상화되어 있음                 │
-│  → "WHERE version = ?" 조건이 왜 필요한지 체감하기 어려움            │
-│                                                                      │
-│  [해결책]                                                            │
-│  MyBatis로 직접 SQL 작성하여 쿼리 레벨 원리 이해                     │
-│  → 두 방식 모두 학습하여 "원리 이해 + 실무 적용" 모두 달성           │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+초기에는 MyBatis로 직접 SQL을 작성하며 `WHERE version = ?` 등의 원리를 체감하려 했으나,
+JPA의 `@Version`, `@Lock(PESSIMISTIC_WRITE)` 활용만으로도 학습 목표 달성이 가능했음.
 
-### 병행 학습 대상
+### 고도화 시 MyBatis 학습 검토 대상
 
-| 개념 | JPA | MyBatis |
-|------|-----|---------|
+| 개념 | JPA (현재) | MyBatis (고도화) |
+|------|-----------|-----------------|
 | 낙관적 락 | @Version 자동 처리 | WHERE version = ? 직접 작성 |
 | 비관적 락 | @Lock(PESSIMISTIC_WRITE) | SELECT ... FOR UPDATE 직접 작성 |
-| 벌크 업데이트 | @Modifying + @Query | UPDATE 쿼리 직접 작성 |
 | 멱등성 체크 | save() + unique constraint | INSERT IGNORE / ON DUPLICATE KEY |
-
-### 학습 순서
-
-```
-1. JPA로 먼저 구현
-   └── 선언적 방식의 편리함 경험
-
-2. MyBatis로 동일 기능 구현
-   └── SQL 직접 작성하며 원리 이해
-   └── "WHERE version = ?" 조건의 의미 체감
-
-3. 두 방식 비교
-   └── 장단점 파악
-   └── 상황에 맞는 선택 능력 배양
-```
-
-### 서비스별 ORM 적용 (선택 가능)
-
-| 서비스 | 권장 ORM | 이유 |
-|--------|---------|------|
-| Order Service | JPA 또는 MyBatis | 낙관적 락 학습용 |
-| Inventory Service | JPA + MyBatis 비교 | 분산 락 + 낙관적 락 조합 |
-| Payment Service | JPA | 비즈니스 로직 중심 |
-| Notification Service | JPA | 단순 CRUD |
-
-**참고**: 실무에서는 하나의 ORM을 일관되게 사용하는 것이 권장되지만,
-학습 목적으로는 두 방식 모두 경험하는 것이 유익합니다.
-
-### MyBatis 학습 문서
-
-아래 문서들에 MyBatis 구현 섹션이 포함되어 있습니다:
-
-| 문서 | MyBatis 학습 내용 | 핵심 SQL 패턴 |
-|------|------------------|---------------|
-| **Phase 2-A** | | |
-| [01-saga-pattern.md](../study/phase2a/01-saga-pattern.md) | Saga 상태 관리 | `WHERE version = ?`, 동적 컬럼 UPDATE |
-| [02-idempotency.md](../study/phase2a/02-idempotency.md) | 멱등성 보장 | `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE` |
-| [05-optimistic-lock.md](../study/phase2a/05-optimistic-lock.md) | 낙관적 락 구현 | `WHERE version = ?`, CAS 패턴 |
-| **Phase 2-B** | | |
-| [04-outbox-pattern.md](../study/phase2b/04-outbox-pattern.md) | Outbox 폴링 | `FOR UPDATE SKIP LOCKED`, 배치 삭제 |
 
 ---
 
 ## D012. 트랜잭션 관리 전략
 
-**결정**: TransactionTemplate (프로그래밍 방식)
+**결정**: @Transactional (선언적 방식)
+
+> **결정 변경 이력**: 초기에는 TransactionTemplate(프로그래밍 방식)을 계획했으나,
+> 구현 과정에서 @Transactional의 간결함과 `timeout`, `readOnly` 등 옵션이 충분하다고 판단하여 변경.
+> 모니터링 메트릭은 Observability(Phase 2-B) 단계에서 AOP 기반으로 추가 예정.
 
 ### 배경
 
@@ -417,74 +371,54 @@ semaphore.trySetPermits(5);  // 최대 5개 동시 발송
 │                @Transactional vs TransactionTemplate                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  [@Transactional - 선언적 방식]                                      │
-│  ├── 장점: 간편함, 코드 간결                                         │
-│  └── 단점: 경계 암묵적, 모니터링 어려움, self-invocation 문제        │
+│  [@Transactional - 선언적 방식] ← 현재 적용                         │
+│  ├── 장점: 간편함, 코드 간결, timeout/readOnly 옵션                  │
+│  └── 주의: self-invocation 시 프록시 우회 → 자기 주입으로 해결       │
 │                                                                      │
 │  [TransactionTemplate - 프로그래밍 방식]                             │
 │  ├── 장점: 경계 명시적, 모니터링 용이, 세밀한 제어                   │
 │  └── 단점: 코드량 증가                                               │
 │                                                                      │
+│  → 현재는 @Transactional 사용, 모니터링 필요 시 전환 검토            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 선택 이유
-
-```
-1. 모니터링 필수
-   └── 트랜잭션 시작/종료 시점에 메트릭/로깅 삽입 필요
-   └── @Transactional은 AOP 기반이라 삽입 어려움
-
-2. 트랜잭션 경계 명확화
-   └── 코드에서 트랜잭션 시작/종료가 명시적으로 보임
-   └── 디버깅 및 코드 리뷰 용이
-
-3. 학습 목적
-   └── 트랜잭션 동작 원리를 명확히 이해
-   └── 스프링의 마법(Magic)에 의존하지 않음
-```
-
-### 모니터링 대상
-
-| 항목 | 메트릭 | 설명 |
-|------|--------|------|
-| 성공/실패 | `transaction.success`, `transaction.failure` | 트랜잭션 결과 카운트 |
-| 소요 시간 | `transaction.duration` | 트랜잭션 처리 시간 |
-| 활성 수 | `transaction.active` | 현재 진행 중인 트랜잭션 |
-| 롤백 | `transaction.rollback` | 롤백 발생 카운트 |
-
-### 구현 패턴
+### 현재 적용 현황
 
 ```java
-public Order createOrder(OrderRequest request) {
-    String txId = generateTxId();
-    Instant start = Instant.now();
-    MDC.put("txId", txId);
+// InventoryService - 타임아웃 + 읽기 전용 분리
+@Transactional(readOnly = true)
+public Inventory getInventory(Long productId) { ... }
 
-    try {
-        Order result = transactionTemplate.execute(status -> {
-            // 비즈니스 로직
-            return orderRepository.save(Order.create(request));
-        });
+@Transactional(timeout = 30)
+public void reserveStockInternal(Long productId, int quantity, String sagaId) { ... }
 
-        meterRegistry.counter("transaction.success", "type", "order").increment();
-        return result;
-
-    } catch (Exception e) {
-        meterRegistry.counter("transaction.failure", "type", "order").increment();
-        throw e;
-
-    } finally {
-        meterRegistry.timer("transaction.duration", "type", "order")
-            .record(Duration.between(start, Instant.now()));
-        MDC.remove("txId");
-    }
+// OrderService - Outbox 패턴과 동일 트랜잭션 보장
+@Transactional
+public Order createOrder(Long customerId) {
+    Order order = orderRepository.save(...);
+    outboxService.save(...);  // 같은 트랜잭션
+    return order;
 }
 ```
 
-### 관련 문서
+### self-invocation 해결 패턴
 
-- [09-transaction-template.md](../study/phase2a/09-transaction-template.md) - TransactionTemplate 학습
+InventoryService에서 분산 락(Redisson) + @Transactional 조합 시,
+같은 클래스 내부 호출은 AOP 프록시를 우회하므로 **자기 주입(self-injection)**으로 해결:
+
+```java
+@Lazy @Autowired private InventoryService self;
+
+public void reserveStock(...) {
+    lock.lock();
+    try {
+        self.reserveStockInternal(...);  // 프록시를 통해 호출
+    } finally {
+        lock.unlock();
+    }
+}
+```
 
 ---
 
@@ -576,27 +510,31 @@ public Order createOrder(OrderRequest request) {
 
 ## D014. Spring Boot 버전 전략
 
-**결정**: Spring Boot 3.4.0 사용, 추후 고도화 시 4.x 전환
+**결정**: Spring Boot 3.5.9 사용, 추후 고도화 시 4.x 전환
+
+> **결정 변경 이력**:
+> - 2026-01-25: 초기 결정 Spring Boot 3.4.0 (Core 라이브러리 호환)
+> - 2026-02-10: D025(Virtual Threads) 적용을 위해 3.5.9로 업그레이드
 
 ### 배경
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Spring Boot 버전 결정 (2026-01-25)                │
+│                    Spring Boot 버전 결정 이력                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  [Core 라이브러리 호환성]                                            │
-│  ├── 자체 개발 Core 라이브러리: Spring Boot 3.4.0 기반              │
-│  ├── Redisson: 3.52.0 (Spring Boot 3.x 호환)                        │
-│  └── Spring Boot 4.x 사용 시 Redisson 4.0+ 필요                     │
+│  [초기 결정] 3.4.0 (2026-01-25)                                     │
+│  ├── Core 라이브러리: Spring Boot 3.4.0 기반                        │
+│  └── 안정성 우선                                                     │
 │                                                                      │
-│  [Temporal 호환성]                                                   │
-│  ├── temporal-spring-boot-starter: Spring Boot 3.x 공식 지원        │
-│  ├── Spring Boot 4.x: 공식 지원 미확인                              │
-│  └── 현재 버전으로 안정적 학습 가능                                  │
+│  [변경] 3.5.9 (2026-02-10)                                          │
+│  ├── D025 Virtual Threads 활성화에 3.5+ 필요                        │
+│  ├── Redisson 3.52.0: Spring Boot 3.5 호환 확인                     │
+│  ├── Temporal SDK 1.26.0: Spring Boot 3.5 호환 확인                 │
+│  └── Spring Boot 3.5.9: 2025-12-18 릴리스 (안정 버전)              │
 │                                                                      │
-│  [결정]                                                              │
-│  └── Spring Boot 3.4.0으로 진행, 학습 완료 후 버전업 고도화         │
+│  [추후 고도화]                                                      │
+│  └── Phase 3 완료 후 Spring Boot 4.x 마이그레이션 검토              │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -605,10 +543,10 @@ public Order createOrder(OrderRequest request) {
 
 | Phase | Spring Boot | 비고 |
 |-------|-------------|------|
-| Phase 1 | 3.4.0 | 기반 구축 |
-| Phase 2-A | 3.4.0 | Saga, 동시성 학습 |
-| Phase 2-B | 3.4.0 | MQ, Observability 학습 |
-| Phase 3 | 3.4.0 | Temporal 연동 |
+| Phase 1 | 3.4.0 → 3.5.9 | 기반 구축 (D025 적용 시 업그레이드) |
+| Phase 2-A | 3.5.9 | Saga, 동시성 학습 |
+| Phase 2-B | 3.5.9 | MQ, Observability 학습 |
+| Phase 3 | 3.5.9 | Temporal 연동 |
 | **고도화** | 4.x 전환 | 학습 완료 후 마이그레이션 |
 
 ### 고도화 시 체크리스트

@@ -307,6 +307,8 @@ RetryOptions.newBuilder()
     ).build();
 ```
 
+> **[프로젝트 참고]**: `setDoNotRetry()`는 권장 패턴입니다. 현재 프로젝트 코드에 `setDoNotRetry(BusinessException.class.getName())` 설정을 추가할 예정입니다. 비즈니스 예외(재고 부족, 잘못된 입력 등)는 재시도해도 결과가 바뀌지 않으므로 즉시 실패 처리하는 것이 올바른 전략입니다.
+
 ### 5.6 Replay 시 로그 중복 출력
 
 ```java
@@ -405,8 +407,8 @@ if (!Workflow.isReplaying()) {
 
 ---
 
-> **Phase 3 학습 완료!**
+> **다음 학습**: [15-code-review.md](./15-code-review.md) - 학습 내용을 실제 코드 버그와 연결하여 이해 심화
 >
 > Temporal의 핵심 개념부터 실전 트러블슈팅까지 학습을 마쳤습니다.
-> 다음 단계에서는 실제 코드를 작성하며 Temporal을 적용해 보세요.
-> Phase 2-A의 순수 Saga 구현과 비교하면서 Temporal의 가치를 체감할 수 있습니다.
+> 다음 단계(15-code-review.md)에서는 학습한 이론이 실제 코드에서 어떻게 위반되는지 확인하고,
+> 이를 수정하면서 Temporal 패턴을 체득합니다.

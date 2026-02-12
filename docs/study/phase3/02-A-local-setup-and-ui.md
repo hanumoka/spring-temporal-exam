@@ -3,6 +3,13 @@
 > **대상**: 02-core-concepts.md를 읽고 5가지 핵심 개념(Workflow, Activity, Worker, Task Queue, Temporal Server)을 이해한 학습자
 > **목표**: Docker Compose로 Temporal 환경을 직접 띄우고, Web UI에서 Workflow를 눈으로 확인하는 것
 > **선행 문서**: [02-core-concepts.md](./02-core-concepts.md)
+>
+> **버전 정보**: Temporal Server 1.25.2 (Docker) / Temporal SDK 1.26.0 (Java) / Temporal UI 2.31.2
+>
+> **⚠️ 참고**: 이 프로젝트는 `temporalio/auto-setup:1.25.2` 이미지를 사용합니다.
+> 이 이미지는 **Deprecated** 상태입니다 (docker-compose 저장소 2026-01-05 아카이브).
+> 학습 목적으로는 문제없으나, 새 프로젝트에서는 `temporal server start-dev` (CLI) 또는
+> `temporalio/server` 이미지를 권장합니다. 상세: [TECH-STACK.md](../../architecture/TECH-STACK.md#️-temporal-docker-이미지-변경)
 
 ---
 

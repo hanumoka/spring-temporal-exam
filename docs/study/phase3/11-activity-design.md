@@ -96,6 +96,10 @@ String key = String.format("%s-%s-%s",
     info.getActivityId()    // "1"
 );
 // 결과: "payment-order-O123-1"
+//
+// [현재 프로젝트 참고]
+// 현재 구현은 sagaId + purpose 조합 사용 (예: "order-123-inventory-reserve")
+// Workflow ID + Activity ID 방식은 Temporal 전환 시 적용할 개선 사항
 
 // 전략 2: 비즈니스 키 기반 (외부 시스템 요구 시)
 String key = String.format("reserve-%s-%s", orderId, productId);
